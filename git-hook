@@ -1,0 +1,10 @@
+#!/bin/sh
+# sandbg's global git hook dispatcher. sandbg-setup symlinks this file under
+# every hook name in ~/.config/sandbg/git-hooks, so git runs it for every hook.
+# On post-commit it signals sandbg (one lightning strike), then runs the
+# repo's own hook of the same name, if it has one, passing its exit code back.
+name=$(basename "$0")
+[ "$name" = post-commit ] && pkill -USR1 -x sandbg >/dev/null 2>&1
+local_hook="$(git rev-parse --git-common-dir)/hooks/$name"
+[ -x "$local_hook" ] && exec "$local_hook" "$@"
+exit 0

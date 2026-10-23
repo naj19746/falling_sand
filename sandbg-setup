@@ -1,0 +1,147 @@
+#!/bin/bash
+# Set up sandbg as the MATE desktop background, or undo it.
+#
+#   sandbg-setup          turn off Caja's desktop icons, create the config
+#                         if missing, add the autostart entry, start sandbg,
+#                         and install the git hook (lightning on each commit)
+#   sandbg-setup --undo   stop sandbg, remove autostart, restore icons,
+#                         and remove the git hook
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+SANDBG_DIR="$CONFIG_DIR/sandbg"
+AUTOSTART="$CONFIG_DIR/autostart/sandbg.desktop"
+ICONS_SAVED="$SANDBG_DIR/.desktop-icons-before"
+HOOKS_DIR="$SANDBG_DIR/git-hooks"
+HOOKS_SAVED="$SANDBG_DIR/.hooks-path-before"
+BIN="$(command -v sandbg || true)"
+EXAMPLE="$(dirname "$(readlink -f "$0")")/../share/sandbg/config.ini.example"
+HOOK_SRC="$(dirname "$(readlink -f "$0")")/../share/sandbg/git-hook"
+HOOK_NAMES="applypatch-msg pre-applypatch post-applypatch pre-commit
+pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase
+post-checkout post-merge pre-push pre-receive update proc-receive
+post-receive post-update reference-transaction push-to-checkout
+pre-auto-gc post-rewrite sendemail-validate fsmonitor-watchman
+p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit
+post-index-change"
+
+setup() {
+    if [ -z "$BIN" ]; then
+        echo "sandbg isn't on your PATH; run 'make install' first" >&2
+        exit 1
+    fi
+    mkdir -p "$SANDBG_DIR" "$(dirname "$AUTOSTART")"
+
+    # Remember the icon setting only the first time, so re-running setup
+    # doesn't overwrite the original with our own 'false'.
+    if [ ! -f "$ICONS_SAVED" ]; then
+        gsettings get org.mate.background show-desktop-icons > "$ICONS_SAVED"
+    fi
+    gsettings set org.mate.background show-desktop-icons false
+    echo "Caja desktop icons: off"
+
+    if [ ! -f "$SANDBG_DIR/config.ini" ] && [ -f "$EXAMPLE" ]; then
+        cp "$EXAMPLE" "$SANDBG_DIR/config.ini"
+        echo "config: created $SANDBG_DIR/config.ini"
+    fi
+
+    cat > "$AUTOSTART" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Falling Sand Wallpaper
+Comment=Animated falling-sand desktop background
+Exec=$BIN
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-MATE-Autostart-Delay=3
+EOF
+    echo "autostart: $AUTOSTART"
+
+    setup_git_hooks
+
+    if pgrep -x sandbg > /dev/null; then
+        echo "sandbg is already running"
+    else
+        setsid "$BIN" > /dev/null 2>&1 < /dev/null &
+        echo "sandbg started"
+    fi
+}
+
+setup_git_hooks() {
+    if ! command -v git > /dev/null 2>&1; then
+        echo "git hooks: git isn't installed, skipping"
+        return
+    fi
+    if [ ! -f "$HOOK_SRC" ]; then
+        echo "git hooks: $HOOK_SRC not found, skipping (run 'make install')"
+        return
+    fi
+
+    local current
+    current="$(git config --global --get core.hooksPath || true)"
+
+    if [ -n "$current" ] && [ "$current" != "$HOOKS_DIR" ]; then
+        echo "git hooks: core.hooksPath is already set to $current, leaving it alone."
+        echo "  add this line to your post-commit hook to get lightning on each commit:"
+        echo "    pkill -USR1 -x sandbg >/dev/null 2>&1"
+        return
+    fi
+
+    # Remember the previous value only the first time, same as the icons.
+    if [ "$current" != "$HOOKS_DIR" ] && [ ! -f "$HOOKS_SAVED" ]; then
+        printf '%s' "$current" > "$HOOKS_SAVED"
+    fi
+
+    mkdir -p "$HOOKS_DIR"
+    cp "$HOOK_SRC" "$HOOKS_DIR/dispatch"
+    chmod 755 "$HOOKS_DIR/dispatch"
+    local name
+    for name in $HOOK_NAMES; do
+        ln -sfn dispatch "$HOOKS_DIR/$name"
+    done
+    git config --global core.hooksPath "$HOOKS_DIR"
+    echo "git hooks: $HOOKS_DIR (lightning on each commit)"
+}
+
+undo_git_hooks() {
+    if command -v git > /dev/null 2>&1; then
+        local current before
+        current="$(git config --global --get core.hooksPath || true)"
+        if [ "$current" = "$HOOKS_DIR" ]; then
+            before=""
+            [ -f "$HOOKS_SAVED" ] && before="$(cat "$HOOKS_SAVED")"
+            if [ -n "$before" ]; then
+                git config --global core.hooksPath "$before"
+                echo "git hooks: core.hooksPath restored to $before"
+            else
+                git config --global --unset core.hooksPath || true
+                echo "git hooks: core.hooksPath unset"
+            fi
+        fi
+    fi
+    rm -f "$HOOKS_SAVED"
+    if [ -d "$HOOKS_DIR" ]; then
+        rm -rf "$HOOKS_DIR"
+        echo "git hooks: removed $HOOKS_DIR"
+    fi
+}
+
+undo() {
+    pkill -x sandbg && echo "sandbg stopped" || true
+    rm -f "$AUTOSTART" && echo "autostart removed"
+
+    local before=true
+    [ -f "$ICONS_SAVED" ] && before="$(cat "$ICONS_SAVED")"
+    gsettings set org.mate.background show-desktop-icons "$before"
+    rm -f "$ICONS_SAVED"
+    echo "Caja desktop icons: $before"
+
+    undo_git_hooks
+}
+
+case "${1:-}" in
+    "")        setup ;;
+    --undo)    undo ;;
+    -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)         echo "usage: sandbg-setup [--undo]" >&2; exit 1 ;;
+esac

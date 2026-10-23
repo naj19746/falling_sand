@@ -1,0 +1,81 @@
+; sandbg settings. Restart sandbg after editing:
+;   pkill sandbg; sandbg &
+; Any setting can also be overridden for one run with --set key=value.
+
+; Screen pixels per grain. Bigger = chunkier grains and less CPU.
+scale = 4
+
+; Frames per second, and simulation steps per frame. Fall speed is
+; fps x steps_per_frame (60 steps/s by default). Each frame costs the
+; compositor a full-screen repaint, so lower fps = less CPU overall.
+fps = 20
+steps_per_frame = 3
+
+; Grain colors: desert, pastel, neon, mono
+palette = desert
+
+; Number of sand sources pouring from the top, 1-3.
+emitters = 2
+
+; Drain the screen when this fraction of it is sand (0.05-0.95).
+fill_reset = 0.6
+
+; How readily grains slide off slopes, 0-1. 0 = piles stand at 45 degrees;
+; higher = flatter, more spread-out piles.
+slipperiness = 0.3
+
+; Sound-driven blaster: follows what's playing times the volume slider.
+audio = true
+; Multiplies the blaster's level (0-4). 2 = twice as destructive.
+blast_strength = 1.0
+; Which output the blaster listens to. Empty = whichever is the default.
+; Set it if your music plays somewhere else; names from: wpctl status -n
+audio_sink =
+
+; Rain from the current weather (Open-Meteo, fetched every 10 minutes):
+; clear skies give 2-5 drops a minute, cloudy skies 5-10, drizzle ~2 a second, rain scales
+; with mm/hour up to 200 a second. Water pools and slowly evaporates.
+weather = true
+latitude = 35.6870        ; Santa Fe, NM
+longitude = -105.9378
+; Force a rate for testing, in drops/minute (-1 = use the weather).
+rain_override = -1
+
+; Each song Spotify plays to the end drops a green seed. Where it lands on
+; sand, the sand within seed_radius grains turns to dirt. Skipped songs
+; don't count. Check what it sees with: sandbg --spotify
+spotify_seeds = true
+seed_radius = 15
+
+; Rain landing on dirt makes it wet (dries in 10 minutes); rain landing
+; on wet dirt grows moss, which dries back once no rain has landed within
+; 100 px of it for 30 minutes. Water seeps slowly down through sand and
+; moss to reach dirt underneath. (No settings; always on.)
+
+; Mouse on the desktop: left = sand, right = stone, middle = erase.
+; Only works with Caja's desktop icons turned off.
+interactive = true
+
+; Each git commit, in any repo, fires a bolt of lightning from the blaster.
+; Sand it hits turns to glass; dirt turns to stone. Needs the git hook that
+; sandbg-setup installs. false = commits don't strike.
+lightning = true
+; How far from the blaster a bolt can land, in grains (10-400).
+lightning_reach = 60
+; Radius of the area a bolt changes, in grains (1-20).
+strike_radius = 7
+; Grains of weight glass holds before it shatters (2-100).
+glass_strength = 35
+
+; Lightning striking moss plants a small tree. It grows a trunk, canopy and
+; roots over tree_minutes, and lives as long as rain lands on it or water
+; reaches its roots; after tree_thirst_minutes without any it withers and
+; falls. While a tree is alive the screen doesn't drain at the fill level:
+; pouring slows to a trickle until the screen is drain_overfill full.
+; Minutes for a tree to grow fully (1-240).
+tree_minutes = 30
+; Minutes without water before a tree starts dying (1-240).
+tree_thirst_minutes = 22
+; Drain anyway, even with trees alive, once the screen is this full
+; (fill_reset to 0.98).
+drain_overfill = 0.8

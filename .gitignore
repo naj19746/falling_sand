@@ -1,0 +1,8 @@
+*.o
+sandbg
+config.ini
+
+# Working notes and specs
+PLAN.md
+LIGHTNING.md
+COMPLETION.md
