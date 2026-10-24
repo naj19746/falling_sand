@@ -68,6 +68,15 @@ static void build_stone(uint32_t *pal)
     }
 }
 
+/* Cool gray metal, slightly varied per color index. */
+static void build_iron(uint32_t *pal)
+{
+    for (int i = 0; i < 256; i++) {
+        int v = 150 + (i * 11 % 29) - 14;
+        pal[i] = 0xFF000000u | (uint32_t)(v << 16 | v << 8 | (v + 20));
+    }
+}
+
 static int shm_failed;
 static int shm_error_handler(Display *d, XErrorEvent *e)
 {
@@ -209,6 +218,7 @@ static int render_setup(Render *r, const PaletteDef *pd)
             r->lut[t][i] = BG_COLOR;
     build_palette(r->lut[SAND], pd);
     build_stone(r->lut[STONE]);
+    build_iron(r->lut[IRON]);
     memcpy(r->lut[DEBRIS], r->lut[STONE], sizeof r->lut[DEBRIS]);
     build_water(r->lut[WATER]);
     build_earth(r->lut[DIRT],     96, 64, 40);

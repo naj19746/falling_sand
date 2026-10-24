@@ -14,7 +14,7 @@
  * piles on it, then it breaks into SHARD, which falls like sand.
  * WOOD, LEAF and ROOT make up a tree, grown from moss struck by lightning.
  * Everything from SAND on falls. */
-enum { EMPTY, STONE, WATER, GLASS, WOOD, LEAF, ROOT,
+enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
        SAND, DEBRIS, SEED, DIRT, WET_DIRT, MOSS, SHARD };
 
 /* Each cell: low byte = type, high byte = palette color index. */
@@ -22,7 +22,7 @@ enum { EMPTY, STONE, WATER, GLASS, WOOD, LEAF, ROOT,
 #define CELL_TYPE(c)      ((c) & 0xFF)
 #define CELL_COLOR(c)     ((c) >> 8)
 #define FALLS(t)          ((t) >= SAND)
-#define SOLID(t)          ((t) == STONE || (t) == GLASS || TREE(t))  /* static, drained by crumbling */
+#define SOLID(t)          ((t) == STONE || (t) == IRON || (t) == GLASS || TREE(t))  /* static, drained by crumbling */
 #define DAMP(t)           ((t) == WET_DIRT || (t) == MOSS)
 #define EARTH(t)          ((t) == DIRT || DAMP(t))    /* the blaster spares these */
 #define TREE(t)           ((t) == WOOD || (t) == LEAF || (t) == ROOT)

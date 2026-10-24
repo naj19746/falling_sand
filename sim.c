@@ -142,6 +142,32 @@ static void set_cell(Sim *s, int x, int y, uint16_t v)
     mark(s, x, y);
 }
 
+/* Cells that the drain must not remove: iron, and dirt/moss/trees that
+ * touch iron. They stay while everything else phases through. */
+static int iron_touching(Sim *s, int x, int y)
+{
+    int w = s->w;
+    if (x > 0 && CELL_TYPE(s->cells[y * w + x - 1]) == IRON)
+        return 1;
+    if (x < w - 1 && CELL_TYPE(s->cells[y * w + x + 1]) == IRON)
+        return 1;
+    if (y > 0 && CELL_TYPE(s->cells[(y - 1) * w + x]) == IRON)
+        return 1;
+    if (y < s->h - 1 && CELL_TYPE(s->cells[(y + 1) * w + x]) == IRON)
+        return 1;
+    return 0;
+}
+
+static int drain_immune(Sim *s, int x, int y)
+{
+    int t = CELL_TYPE(s->cells[y * s->w + x]);
+    if (t == IRON)
+        return 1;
+    if ((t == DIRT || t == WET_DIRT || t == MOSS || TREE(t)) && iron_touching(s, x, y))
+        return 1;
+    return 0;
+}
+
 static void rain_landed(Sim *s, int x, int y)
 {
     s->rain_at[(y >> RAIN_SHIFT) * s->rw + (x >> RAIN_SHIFT)] = s->clock;
@@ -459,6 +485,10 @@ static void crumble(Sim *s)
         uint16_t *row = s->cells + y * s->w;
         for (int x = 0; x < s->w; x++) {
             int t = CELL_TYPE(row[x]);
+            if (t == IRON)
+                continue;
+            if (TREE(t) && iron_touching(s, x, y))
+                continue;
             if (!SOLID(t) || (rnd(s) & 4095) >= chance)
                 continue;
             /* Leaves vanish; wood and roots break up into brown dirt. */
@@ -524,7 +554,7 @@ static void drain(Sim *s)
     int y = s->h - 1;
     uint16_t *floor = s->cells + y * s->w;
     for (int x = s->w / 2 - half; x < s->w / 2 + half; x++)
-        if (x >= 0 && x < s->w && LOOSE(CELL_TYPE(floor[x])))
+        if (x >= 0 && x < s->w && LOOSE(CELL_TYPE(floor[x])) && !drain_immune(s, x, y))
             set_cell(s, x, y, CELL(EMPTY, 0));
 
     if (s->drain_steps > DRAIN_CRUMBLE_AFTER)
@@ -852,9 +882,11 @@ static inline uint64_t load4(const uint16_t *p)
 
 static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
 {
+    if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
+        return;
     int t = CELL_TYPE(row[x]);
     switch (t) {
-    case EMPTY: case STONE: case GLASS: case WOOD: case LEAF: case ROOT:
+    case EMPTY: case STONE: case IRON: case GLASS: case WOOD: case LEAF: case ROOT:
         break;
     case WATER:
         update_water(s, row, next, x, y);
@@ -1457,6 +1489,8 @@ int sim_strike(Sim *s)
                 set_cell(s, x, y, CELL(GLASS, CELL_COLOR(c)));
             else if (t == DIRT || t == WET_DIRT)
                 set_cell(s, x, y, CELL(STONE, rnd(s) & 0xFF));
+            else if (t == STONE)
+                set_cell(s, x, y, CELL(IRON, rnd(s) & 0xFF));
         }
     }
     return 0;
