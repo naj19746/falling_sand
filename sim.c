@@ -89,10 +89,11 @@ static int grain_color(Sim *s)
 }
 
 /* Something changed at (x, y): keep its chunk awake and redraw it. A cell
- * on a chunk edge also wakes the neighbor across that edge, since grains
- * there may now be free to move. Held moss looks HOLD_GAP rows down and
- * roots reach ROOT_DEPTH rows down, so near the top or bottom the chunk
- * above or below is woken too. */
+ * near a chunk edge also wakes the neighbor across that edge, since grains
+ * there may now be free to move. The band covers water's sideways reach,
+ * which is longer than a grain's two-cell slip. Held moss looks HOLD_GAP
+ * rows down and roots reach ROOT_DEPTH rows down, so near the top or bottom
+ * the chunk above or below is woken too. */
 static inline void mark(Sim *s, int x, int y)
 {
     int cx = x >> CHUNK_SHIFT, cy = y >> CHUNK_SHIFT;
@@ -100,12 +101,13 @@ static inline void mark(Sim *s, int x, int y)
     int c = cy * s->cw + cx;
     s->changed[c] = 1;
     /* Most cells are well inside their chunk: no neighbors to wake. */
-    if (lx != 0 && lx != CHUNK - 1 && ly >= HOLD_GAP && ly < CHUNK - ROOT_DEPTH) {
+    if (lx >= WATER_SPREAD && lx < CHUNK - WATER_SPREAD &&
+        ly >= HOLD_GAP && ly < CHUNK - ROOT_DEPTH) {
         s->awake[c] = WAKE_STEPS;
         return;
     }
-    int x0 = cx - (lx == 0),         x1 = cx + (lx == CHUNK - 1);
-    int y0 = cy - (ly < HOLD_GAP),   y1 = cy + (ly >= CHUNK - ROOT_DEPTH);
+    int x0 = cx - (lx < WATER_SPREAD), x1 = cx + (lx >= CHUNK - WATER_SPREAD);
+    int y0 = cy - (ly < HOLD_GAP),     y1 = cy + (ly >= CHUNK - ROOT_DEPTH);
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 >= s->cw) x1 = s->cw - 1;
