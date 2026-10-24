@@ -22,9 +22,10 @@ enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
 #define CELL_TYPE(c)      ((c) & 0xFF)
 #define CELL_COLOR(c)     ((c) >> 8)
 #define FALLS(t)          ((t) >= SAND)
-#define SOLID(t)          ((t) == STONE || (t) == IRON || (t) == GLASS || TREE(t))  /* static, drained by crumbling */
+#define SOLID(t)          ((t) == STONE || (t) == GLASS || TREE(t))  /* stone, glass and trees: crumble during drain */
 #define DAMP(t)           ((t) == WET_DIRT || (t) == MOSS)
 #define EARTH(t)          ((t) == DIRT || DAMP(t))    /* the blaster spares these */
+#define HELD_BY_IRON(t)   (EARTH(t) || TREE(t))       /* earth or tree joined to iron */
 #define TREE(t)           ((t) == WOOD || (t) == LEAF || (t) == ROOT)
 
 /* Color bit on a leaf that has turned brown on a thirsty tree. */
@@ -155,6 +156,11 @@ typedef struct {
     int strike_radius;      /* cells around the impact that change */
     int glass_strength;     /* cells of load glass holds before breaking */
     int glass;              /* glass cells, running total */
+    int iron;               /* iron cells, running total */
+    uint8_t *keep;          /* per cell: kept through the drain */
+    int *stack;             /* flood-fill scratch, w*h ints */
+    int kept_grains;        /* kept dirt/moss, counted in grains too */
+    int kept_solids;        /* kept tree cells, counted in solids too */
     Bolt bolt;
 
     /* Trees: while any is alive the drain waits, pouring at a trickle,

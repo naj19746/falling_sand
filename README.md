@@ -15,8 +15,10 @@ over. A few things outside the sandbox feed into it:
   where it lands into dirt. Rain soaks dirt, and dirt rained on twice grows
   moss.
 - **Git:** each commit, in any repo, fires a bolt of lightning. Sand it
-  hits turns to glass, dirt turns to stone, and moss sprouts a tree that
-  lives as long as it gets water.
+  hits turns to glass, dirt turns to stone, stone turns to iron, and moss
+  sprouts a tree that lives as long as it gets water. Iron survives the
+  drain: it and the dirt, moss or trees touching it stay, while the rest
+  of the pile sifts through.
 
 It costs well under 1% of a CPU core when it's idle, and it pauses while a
 maximized or fullscreen window covers the desktop.

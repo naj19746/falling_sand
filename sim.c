@@ -134,38 +134,45 @@ static void set_cell(Sim *s, int x, int y, uint16_t v)
     s->grains += FALLS(new) - FALLS(old);
     s->solids += SOLID(new) - SOLID(old);
     s->glass  += (new == GLASS) - (old == GLASS);
+    s->iron   += (new == IRON) - (old == IRON);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
     if (DAMP(new))
         s->since[idx] = s->clock;
     *cell = v;
+    if (s->keep)
+        s->keep[idx] = 0;
     mark(s, x, y);
 }
 
-/* Cells that the drain must not remove: iron, and dirt/moss/trees that
- * touch iron. They stay while everything else phases through. */
-static int iron_touching(Sim *s, int x, int y)
+static inline int drain_immune(const Sim *s, int x, int y)
 {
-    int w = s->w;
-    if (x > 0 && CELL_TYPE(s->cells[y * w + x - 1]) == IRON)
-        return 1;
-    if (x < w - 1 && CELL_TYPE(s->cells[y * w + x + 1]) == IRON)
-        return 1;
-    if (y > 0 && CELL_TYPE(s->cells[(y - 1) * w + x]) == IRON)
-        return 1;
-    if (y < s->h - 1 && CELL_TYPE(s->cells[(y + 1) * w + x]) == IRON)
-        return 1;
-    return 0;
+    return s->keep ? s->keep[y * s->w + x] : 0;
 }
 
-static int drain_immune(Sim *s, int x, int y)
+/* Mark iron and every earth or tree cell connected to it. Runs once per drain. */
+static void mark_kept(Sim *s)
 {
-    int t = CELL_TYPE(s->cells[y * s->w + x]);
-    if (t == IRON)
-        return 1;
-    if ((t == DIRT || t == WET_DIRT || t == MOSS || TREE(t)) && iron_touching(s, x, y))
-        return 1;
-    return 0;
+    int n = 0, w = s->w;
+    memset(s->keep, 0, (size_t)w * s->h);
+    for (int i = 0; i < w * s->h; i++)
+        if (CELL_TYPE(s->cells[i]) == IRON) {
+            s->keep[i] = 1;
+            s->stack[n++] = i;
+        }
+    while (n > 0) {
+        int i = s->stack[--n];
+        int x = i % w, y = i / w;
+        int nb[4] = { x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1,
+                      y > 0 ? i - w : -1, y < s->h - 1 ? i + w : -1 };
+        for (int k = 0; k < 4; k++) {
+            int j = nb[k];
+            if (j < 0 || s->keep[j] || !HELD_BY_IRON(CELL_TYPE(s->cells[j])))
+                continue;
+            s->keep[j] = 1;
+            s->stack[n++] = j;
+        }
+    }
 }
 
 static void rain_landed(Sim *s, int x, int y)
@@ -274,8 +281,11 @@ static void place_ledges(Sim *s)
             int y = y0 + (int)(dx * slope);
             for (int t = 0; t < 2; t++) {
                 int yy = y + t;
-                if (yy >= 0 && yy < s->h)
-                    set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0xFF));
+                if (yy >= 0 && yy < s->h) {
+                    int idx = yy * s->w + (x0 + dx);
+                    if (CELL_TYPE(s->cells[idx]) == EMPTY && !(s->keep && s->keep[idx]))
+                        set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0xFF));
+                }
             }
         }
     }
@@ -309,7 +319,9 @@ int sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters)
     s->moved   = calloc((size_t)w * h, 1);
     s->since   = calloc((size_t)w * h, sizeof *s->since);
     s->rain_at = calloc((size_t)s->rw * s->rh, sizeof *s->rain_at);
-    if (!s->cells || !s->awake || !s->changed || !s->moved || !s->since || !s->rain_at)
+    s->keep    = calloc((size_t)w * h, 1);
+    s->stack   = malloc((size_t)w * h * sizeof *s->stack);
+    if (!s->cells || !s->awake || !s->changed || !s->moved || !s->since || !s->rain_at || !s->keep || !s->stack)
         return -1;
     s->bl.x = w * 0.5f;
     s->bl.y = h - 1;
@@ -325,6 +337,8 @@ void sim_free(Sim *s)
     free(s->moved);
     free(s->since);
     free(s->rain_at);
+    free(s->keep);
+    free(s->stack);
     s->moved = NULL;
     s->since = s->rain_at = NULL;
     s->cells = NULL;
@@ -334,7 +348,9 @@ void sim_free(Sim *s)
 void sim_reset(Sim *s)
 {
     memset(s->cells, 0, (size_t)s->w * s->h * sizeof *s->cells);
-    s->grains = s->solids = s->water = s->damp = s->glass = 0;
+    if (s->keep) memset(s->keep, 0, (size_t)s->w * s->h);
+    s->grains = s->solids = s->water = s->damp = s->glass = s->iron = 0;
+    s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;
     wake_all(s);
@@ -348,15 +364,60 @@ void sim_reset(Sim *s)
     place_ledges(s);
 }
 
+/* End of a drain: clear everything but iron and what it holds up. */
+static void clear_unkept(Sim *s)
+{
+    for (int i = 0; i < s->w * s->h; i++) {
+        if (s->keep && s->keep[i])
+            continue;
+        int t = CELL_TYPE(s->cells[i]);
+        if (t != EMPTY)
+            set_cell(s, i % s->w, i / s->w, CELL(EMPTY, 0));
+    }
+    for (int i = 0; i < s->n_emitters; i++) {
+        s->em[i].burst_left = 0;
+        s->em[i].idle_left = i * 60 + (int)(rnd(s) % 60);
+    }
+    s->phase = PHASE_FILL;
+    s->drain_steps = 0;
+    s->kept_grains = 0;
+    s->kept_solids = 0;
+    wake_all(s);
+    place_ledges(s);
+}
+
 void sim_start_drain(Sim *s)
 {
     if (s->phase == PHASE_DRAIN)
         return;
     s->phase = PHASE_DRAIN;
     s->drain_steps = 0;
-    /* Trees come down with everything else as the drain crumbles them. */
-    memset(s->tree, 0, sizeof s->tree);
-    s->trees = 0;
+    mark_kept(s);
+    /* Keep trees whose base cell is kept; drop the rest. */
+    int nt = 0;
+    for (int i = 0; i < MAX_TREES; i++) {
+        if (s->tree[i].stage == TREE_FREE)
+            continue;
+        int idx = s->tree[i].y * s->w + s->tree[i].x;
+        if (s->keep[idx]) {
+            if (nt != i)
+                s->tree[nt] = s->tree[i];
+            nt++;
+        } else
+            memset(&s->tree[i], 0, sizeof s->tree[i]);
+    }
+    for (int i = nt; i < MAX_TREES; i++)
+        memset(&s->tree[i], 0, sizeof s->tree[i]);
+    s->trees = nt;
+    /* Count kept cells so the end-of-drain check can ignore them. */
+    s->kept_grains = 0;
+    s->kept_solids = 0;
+    for (int i = 0; i < s->w * s->h; i++)
+        if (s->keep[i]) {
+            int t = CELL_TYPE(s->cells[i]);
+            if (FALLS(t)) s->kept_grains++;
+            if (SOLID(t)) s->kept_solids++;
+        }
 }
 
 int sim_awake_chunks(const Sim *s)
@@ -485,9 +546,7 @@ static void crumble(Sim *s)
         uint16_t *row = s->cells + y * s->w;
         for (int x = 0; x < s->w; x++) {
             int t = CELL_TYPE(row[x]);
-            if (t == IRON)
-                continue;
-            if (TREE(t) && iron_touching(s, x, y))
+            if (t == IRON || (s->keep && s->keep[y * s->w + x]))
                 continue;
             if (!SOLID(t) || (rnd(s) & 4095) >= chance)
                 continue;
@@ -560,9 +619,10 @@ static void drain(Sim *s)
     if (s->drain_steps > DRAIN_CRUMBLE_AFTER)
         crumble(s);
 
-    int done = s->drain_steps > DRAIN_OPEN_STEPS && s->grains == 0 && s->solids == 0;
+    int done = s->drain_steps > DRAIN_OPEN_STEPS &&
+               s->grains == s->kept_grains && s->solids == s->kept_solids;
     if (done || s->drain_steps > DRAIN_MAX_STEPS)
-        sim_reset(s);
+        clear_unkept(s);
 }
 
 /* Move a cell from (x, y) to (nx, y + 1), swapping with what was there
@@ -580,6 +640,17 @@ static inline void move(Sim *s, uint16_t *row, uint16_t *next, int x, int nx, in
     mark(s, x, y);
     mark(s, nx, y + 1);
 }
+
+/* Through iron and what it holds, per step out of 1024. Ramps up over
+ * the drain so the rest of the pile sifts out as the floor opens. */
+static inline uint32_t phase_chance(const Sim *s)
+{
+    int c = 8 + (int)s->drain_steps / 20;
+    if (c > 512) c = 512;
+    return (uint32_t)c;
+}
+
+#define PHASE_REACH 8
 
 /* Sand and debris sink through water. */
 static inline int sand_can_enter(uint16_t c)
@@ -768,6 +839,34 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
             if (x + d >= 0 && x + d < w && CELL_TYPE(row[x + d]) == EMPTY)
                 target = x + d;
     }
+    if (target < 0 && s->phase == PHASE_DRAIN && y + 1 < s->h && s->keep &&
+        s->keep[(y + 1) * s->w + x] && (rnd(s) & 1023) < phase_chance(s)) {
+        int found = 0, ny;
+        for (ny = y + 2; ny < s->h && ny <= y + 1 + PHASE_REACH; ny++) {
+            int j = ny * s->w + x;
+            if (s->keep[j])
+                continue;
+            int tt = CELL_TYPE(s->cells[j]);
+            if (tt == EMPTY || (tt == WATER && !(CELL_COLOR(s->cells[j]) & SEEPING))) {
+                found = 1;
+                break;
+            }
+            break;
+        }
+        if (found) {
+            uint16_t c = row[x];
+            uint16_t o = s->cells[ny * s->w + x];
+            row[x] = o;
+            s->cells[ny * s->w + x] = c;
+            s->moved[y * s->w + x] = 0;
+            s->moved[ny * s->w + x] = (uint8_t)s->frame;
+            mark(s, x, y);
+            mark(s, x, ny);
+            if (ny == s->h - 1)
+                land(s, &s->cells[ny * s->w + x], x, ny);
+            return;
+        }
+    }
     if (target < 0)
         return;
 
@@ -803,6 +902,39 @@ static int fall(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
                 move(s, row, next, x, nx, y);
                 return nx;
             }
+        }
+    }
+    /* During the drain, sift down through kept cells. */
+    if (s->phase == PHASE_DRAIN && y + 1 < s->h && s->keep &&
+        s->keep[(y + 1) * s->w + x] && (rnd(s) & 1023) < phase_chance(s)) {
+        int found = 0, ny;
+        for (ny = y + 2; ny < s->h && ny <= y + 1 + PHASE_REACH; ny++) {
+            int j = ny * s->w + x;
+            if (s->keep[j])
+                continue;
+            if (sand_can_enter(s->cells[j])) {
+                found = 1;
+                break;
+            }
+            break;
+        }
+        if (found) {
+            uint16_t c = row[x];
+            uint16_t o = s->cells[ny * s->w + x];
+            row[x] = o;
+            s->cells[ny * s->w + x] = c;
+            if (DAMP(CELL_TYPE(c)))
+                s->since[ny * s->w + x] = s->since[y * s->w + x];
+            mark(s, x, y);
+            mark(s, x, ny);
+            return x;
+        }
+        /* Kept run reaches the floor: drain out if the gap is open here. */
+        if (ny >= s->h || (s->keep && s->keep[(s->h - 1) * s->w + x])) {
+            int half = s->w / 20 + (int)((long)s->drain_steps * s->w / (2 * DRAIN_OPEN_STEPS));
+            if (half > s->w / 2 + 1) half = s->w / 2 + 1;
+            if (x >= s->w / 2 - half && x < s->w / 2 + half)
+                set_cell(s, x, y, CELL(EMPTY, 0));
         }
     }
     return -1;
@@ -882,8 +1014,6 @@ static inline uint64_t load4(const uint16_t *p)
 
 static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
 {
-    if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
-        return;
     int t = CELL_TYPE(row[x]);
     switch (t) {
     case EMPTY: case STONE: case IRON: case GLASS: case WOOD: case LEAF: case ROOT:
@@ -895,6 +1025,8 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
         update_seed(s, row, next, x, y);
         break;
     case DIRT: case WET_DIRT:
+        if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
+            break;
         if (!rooted(s, x, y)) {
             fall(s, row, next, x, y);
             break;
@@ -903,6 +1035,8 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
             move(s, row, next, x, x, y);
         break;
     case MOSS:
+        if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
+            break;
         if (open_below(s, x, y))            /* held: straight down or not at all */
             move(s, row, next, x, x, y);
         break;
@@ -1473,7 +1607,8 @@ int sim_strike(Sim *s)
     }
 
     /* Sand fuses to glass, keeping its color so the banding shows through,
-     * unless it's still falling; dirt bakes to stone. */
+     * unless it's still falling; dirt bakes to stone; stone becomes iron.
+     * Iron struck again does nothing. */
     for (int y = ty - r; y <= ty + r; y++) {
         if (y < 0 || y >= s->h)
             continue;
