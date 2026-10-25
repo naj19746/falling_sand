@@ -128,6 +128,9 @@ typedef struct {
     float fill_reset;       /* start draining at this fraction full */
     int phase;
     int drain_steps;
+    int stall_steps;        /* fill steps into the current stall window */
+    int stall_tried;        /* grains the emitters tried to pour in it */
+    int stall_grains;       /* grains when it started */
 
     int blaster_on;
     Blaster bl;

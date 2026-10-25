@@ -18,7 +18,8 @@ over. A few things outside the sandbox feed into it:
   hits turns to glass, dirt turns to stone, stone turns to iron, and moss
   sprouts a tree that lives as long as it gets water. Iron survives the
   drain: it and the dirt, moss or trees touching it stay, while the rest
-  of the pile sifts through.
+  of the pile sifts through. Now and then some or all of it rusts back to
+  stone.
 
 It costs well under 1% of a CPU core when it's idle, and it pauses while a
 maximized or fullscreen window covers the desktop.

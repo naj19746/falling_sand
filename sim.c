@@ -60,6 +60,19 @@
 #define HOLD_POUR_DIV 10
 #define OVERFILL_STEPS 600
 
+/* Iron overhangs can leave the pile blocking the top row before the screen
+ * counts as full. If the emitters are pouring but the grains grow by less
+ * than STALL_GAIN of the screen over STALL_STEPS, the fill is as full as it
+ * will get: drain. Judged by growth rather than by blocked grains, since
+ * rain keeps opening the odd cell along the top. */
+#define STALL_STEPS 3600
+#define STALL_GAIN  0.0025f
+
+/* Chance per fill, in percent, that about half the iron rusts back to
+ * stone, and that all of it does. */
+#define RUST_HALF 10
+#define RUST_ALL  5
+
 /* Trees: a withering tree browns (or, rescued, greens) one leaf every
  * LEAF_SECS; once all are brown it falls after DEAD_SECS plus up to
  * DEAD_JITTER more without water, taking about FALL_SECS to come down. */
@@ -140,8 +153,22 @@ static void set_cell(Sim *s, int x, int y, uint16_t v)
     if (DAMP(new))
         s->since[idx] = s->clock;
     *cell = v;
-    if (s->keep)
-        s->keep[idx] = 0;
+    /* The kept mask follows the type: a kept cell that turns into
+     * something else iron holds (wet dirt drying, moss sprouting a trunk)
+     * stays kept, and the kept totals move with it so the end-of-drain
+     * check stays right. New iron is always kept. */
+    if (s->keep && s->keep[idx]) {
+        if (new == IRON || HELD_BY_IRON(new)) {
+            s->kept_grains += FALLS(new) - FALLS(old);
+            s->kept_solids += SOLID(new) - SOLID(old);
+        } else {
+            s->keep[idx] = 0;
+            s->kept_grains -= FALLS(old);
+            s->kept_solids -= SOLID(old);
+        }
+    } else if (s->keep && new == IRON) {
+        s->keep[idx] = 1;
+    }
     mark(s, x, y);
 }
 
@@ -361,7 +388,49 @@ void sim_reset(Sim *s)
     }
     s->phase = PHASE_FILL;
     s->drain_steps = 0;
+    s->stall_steps = s->stall_tried = s->stall_grains = 0;
     place_ledges(s);
+}
+
+/* Iron rusts back to stone now and then, so it can't build up until the
+ * sand has nowhere to go: at the start of a fill, sometimes about half of
+ * it goes, and rarely all of it. Each connected piece rusts whole or not
+ * at all, so what stays is intact. Uses keep as the visited mask; the
+ * caller clears it afterwards. */
+static void rust_iron(Sim *s)
+{
+    uint32_t roll = rnd(s) % 100;
+    if (roll >= RUST_HALF + RUST_ALL)
+        return;
+    int all = roll < RUST_ALL, w = s->w;
+    memset(s->keep, 0, (size_t)w * s->h);
+    for (int i = 0; i < w * s->h; i++) {
+        if (CELL_TYPE(s->cells[i]) != IRON || s->keep[i])
+            continue;
+        /* Breadth-first, so when it's done stack[0..tail) is the piece. */
+        int head = 0, tail = 0;
+        s->keep[i] = 1;
+        s->stack[tail++] = i;
+        while (head < tail) {
+            int j = s->stack[head++];
+            int x = j % w, y = j / w;
+            int nb[4] = { x > 0 ? j - 1 : -1, x < w - 1 ? j + 1 : -1,
+                          y > 0 ? j - w : -1, y < s->h - 1 ? j + w : -1 };
+            for (int k = 0; k < 4; k++) {
+                int n = nb[k];
+                if (n < 0 || s->keep[n] || CELL_TYPE(s->cells[n]) != IRON)
+                    continue;
+                s->keep[n] = 1;
+                s->stack[tail++] = n;
+            }
+        }
+        if (!all && (rnd(s) & 1))
+            continue;
+        for (int k = 0; k < tail; k++) {
+            int j = s->stack[k];
+            set_cell(s, j % w, j / w, CELL(STONE, CELL_COLOR(s->cells[j])));
+        }
+    }
 }
 
 /* End of a drain: clear everything but iron and what it holds up. */
@@ -380,8 +449,14 @@ static void clear_unkept(Sim *s)
     }
     s->phase = PHASE_FILL;
     s->drain_steps = 0;
+    rust_iron(s);
+    /* Kept dirt can fall during the fill, and move() doesn't carry the
+     * mask, so drop it now; the next drain marks the kept cells again. */
+    memset(s->keep, 0, (size_t)s->w * s->h);
     s->kept_grains = 0;
     s->kept_solids = 0;
+    s->stall_steps = s->stall_tried = 0;
+    s->stall_grains = s->grains;
     wake_all(s);
     place_ledges(s);
 }
@@ -451,7 +526,9 @@ static void wander(Sim *s, float *x, float *v, float jitter, float vmax,
 }
 
 /* Pours 1 in div of the grains it otherwise would. */
-static void emit(Sim *s, Emitter *e, int div)
+/* Adds how many grains it tried to pour (not counting ones skipped by the
+ * trickle) to *tried. */
+static void emit(Sim *s, Emitter *e, int div, int *tried)
 {
     if (e->burst_left <= 0) {
         if (e->idle_left > 0) {
@@ -471,6 +548,7 @@ static void emit(Sim *s, Emitter *e, int div)
             continue;
         if (x < 0 || x >= s->w)
             continue;
+        (*tried)++;
         if (CELL_TYPE(s->cells[x]) == EMPTY)
             set_cell(s, x, 0, CELL(SAND, grain_color(s)));
     }
@@ -546,9 +624,7 @@ static void crumble(Sim *s)
         uint16_t *row = s->cells + y * s->w;
         for (int x = 0; x < s->w; x++) {
             int t = CELL_TYPE(row[x]);
-            if (t == IRON || (s->keep && s->keep[y * s->w + x]))
-                continue;
-            if (!SOLID(t) || (rnd(s) & 4095) >= chance)
+            if (!SOLID(t) || (rnd(s) & 4095) >= chance || s->keep[y * s->w + x])
                 continue;
             /* Leaves vanish; wood and roots break up into brown dirt. */
             if (t == LEAF)
@@ -602,14 +678,19 @@ static void drain_floor(Sim *s)
             set_cell(s, x, y, CELL(EMPTY, 0));
 }
 
+/* Half the width of the gap in the floor, centered, widening until the
+ * whole floor is open. */
+static int floor_gap(const Sim *s)
+{
+    int half = s->w / 20 + (int)((long)s->drain_steps * s->w / (2 * DRAIN_OPEN_STEPS));
+    return half > s->w / 2 + 1 ? s->w / 2 + 1 : half;
+}
+
 static void drain(Sim *s)
 {
     s->drain_steps++;
 
-    /* Gap in the floor, centered, widening until the whole floor is open. */
-    int half = s->w / 20 + (int)((long)s->drain_steps * s->w / (2 * DRAIN_OPEN_STEPS));
-    if (half > s->w / 2 + 1)
-        half = s->w / 2 + 1;
+    int half = floor_gap(s);
     int y = s->h - 1;
     uint16_t *floor = s->cells + y * s->w;
     for (int x = s->w / 2 - half; x < s->w / 2 + half; x++)
@@ -650,13 +731,17 @@ static inline uint32_t phase_chance(const Sim *s)
     return (uint32_t)c;
 }
 
-#define PHASE_REACH 8
-
 /* Sand and debris sink through water. */
 static inline int sand_can_enter(uint16_t c)
 {
     int t = CELL_TYPE(c);
     return t == EMPTY || (t == WATER && !(CELL_COLOR(c) & SEEPING));
+}
+
+/* Keep a chunk scanned without redrawing it. */
+static inline void stay_awake(Sim *s, int x, int y)
+{
+    s->awake[(y >> CHUNK_SHIFT) * s->cw + (x >> CHUNK_SHIFT)] = WAKE_STEPS;
 }
 
 /* A drop soaked into the dirt at (cx, cy): wet the dirt around it, or if it
@@ -731,6 +816,45 @@ static inline void land(Sim *s, uint16_t *cell, int x, int y)
         *cell &= ~(RAIN_FRESH << 8);
         rain_landed(s, x, y);
     }
+}
+
+/* During the drain, a grain or drop stuck on iron or what it holds hops
+ * down its column past the kept run to the first open cell, or out through
+ * the floor gap if the run reaches the floor. It's a swap, so the totals
+ * don't move. Until it gets through it keeps its chunk awake: a sleeping
+ * chunk would never roll again, and the drain would wait on it. */
+static void phase_through(Sim *s, uint16_t *row, int x, int y)
+{
+    int w = s->w;
+    if (s->phase != PHASE_DRAIN || y + 1 >= s->h || !s->keep[(y + 1) * w + x])
+        return;
+    stay_awake(s, x, y);
+    if ((rnd(s) & 1023) >= phase_chance(s))
+        return;
+    int ny = y + 2;
+    while (ny < s->h && s->keep[ny * w + x])
+        ny++;
+    if (ny >= s->h) {
+        int half = floor_gap(s);
+        if (x >= w / 2 - half && x < w / 2 + half)
+            set_cell(s, x, y, CELL(EMPTY, 0));
+        return;
+    }
+    int j = ny * w + x;
+    if (!sand_can_enter(s->cells[j]))
+        return;
+    uint16_t c = row[x];
+    row[x] = s->cells[j];
+    s->cells[j] = c;
+    if (DAMP(CELL_TYPE(c)))
+        s->since[j] = s->since[y * w + x];
+    if (CELL_TYPE(c) == WATER) {
+        s->moved[j] = (uint8_t)s->frame;
+        if (ny == s->h - 1)
+            land(s, &s->cells[j], x, ny);
+    }
+    mark(s, x, y);
+    mark(s, x, ny);
 }
 
 static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
@@ -839,36 +963,10 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
             if (x + d >= 0 && x + d < w && CELL_TYPE(row[x + d]) == EMPTY)
                 target = x + d;
     }
-    if (target < 0 && s->phase == PHASE_DRAIN && y + 1 < s->h && s->keep &&
-        s->keep[(y + 1) * s->w + x] && (rnd(s) & 1023) < phase_chance(s)) {
-        int found = 0, ny;
-        for (ny = y + 2; ny < s->h && ny <= y + 1 + PHASE_REACH; ny++) {
-            int j = ny * s->w + x;
-            if (s->keep[j])
-                continue;
-            int tt = CELL_TYPE(s->cells[j]);
-            if (tt == EMPTY || (tt == WATER && !(CELL_COLOR(s->cells[j]) & SEEPING))) {
-                found = 1;
-                break;
-            }
-            break;
-        }
-        if (found) {
-            uint16_t c = row[x];
-            uint16_t o = s->cells[ny * s->w + x];
-            row[x] = o;
-            s->cells[ny * s->w + x] = c;
-            s->moved[y * s->w + x] = 0;
-            s->moved[ny * s->w + x] = (uint8_t)s->frame;
-            mark(s, x, y);
-            mark(s, x, ny);
-            if (ny == s->h - 1)
-                land(s, &s->cells[ny * s->w + x], x, ny);
-            return;
-        }
-    }
-    if (target < 0)
+    if (target < 0) {
+        phase_through(s, row, x, y);
         return;
+    }
 
     row[target] = row[x];
     row[x] = CELL(EMPTY, 0);
@@ -902,39 +1000,6 @@ static int fall(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
                 move(s, row, next, x, nx, y);
                 return nx;
             }
-        }
-    }
-    /* During the drain, sift down through kept cells. */
-    if (s->phase == PHASE_DRAIN && y + 1 < s->h && s->keep &&
-        s->keep[(y + 1) * s->w + x] && (rnd(s) & 1023) < phase_chance(s)) {
-        int found = 0, ny;
-        for (ny = y + 2; ny < s->h && ny <= y + 1 + PHASE_REACH; ny++) {
-            int j = ny * s->w + x;
-            if (s->keep[j])
-                continue;
-            if (sand_can_enter(s->cells[j])) {
-                found = 1;
-                break;
-            }
-            break;
-        }
-        if (found) {
-            uint16_t c = row[x];
-            uint16_t o = s->cells[ny * s->w + x];
-            row[x] = o;
-            s->cells[ny * s->w + x] = c;
-            if (DAMP(CELL_TYPE(c)))
-                s->since[ny * s->w + x] = s->since[y * s->w + x];
-            mark(s, x, y);
-            mark(s, x, ny);
-            return x;
-        }
-        /* Kept run reaches the floor: drain out if the gap is open here. */
-        if (ny >= s->h || (s->keep && s->keep[(s->h - 1) * s->w + x])) {
-            int half = s->w / 20 + (int)((long)s->drain_steps * s->w / (2 * DRAIN_OPEN_STEPS));
-            if (half > s->w / 2 + 1) half = s->w / 2 + 1;
-            if (x >= s->w / 2 - half && x < s->w / 2 + half)
-                set_cell(s, x, y, CELL(EMPTY, 0));
         }
     }
     return -1;
@@ -1024,25 +1089,36 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
     case SEED:
         update_seed(s, row, next, x, y);
         break;
-    case DIRT: case WET_DIRT:
-        if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
+    case DIRT: case WET_DIRT: case MOSS:
+        /* During the drain, kept earth stays put. Other earth stops
+         * clinging once the floor is open, or straight away when it rests
+         * on a kept cell: kept roots, moss and iron never crumble, so what
+         * they hold up would wait there forever. */
+        if (s->phase == PHASE_DRAIN) {
+            if (drain_immune(s, x, y))
+                break;
+            if (s->drain_steps > DRAIN_OPEN_STEPS || s->keep[(y + 1) * s->w + x]) {
+                if (fall(s, row, next, x, y) < 0)
+                    phase_through(s, row, x, y);
+                break;
+            }
+        }
+        if (t == MOSS) {
+            if (open_below(s, x, y))        /* held: straight down or not at all */
+                move(s, row, next, x, x, y);
             break;
+        }
         if (!rooted(s, x, y)) {
-            fall(s, row, next, x, y);
+            if (fall(s, row, next, x, y) < 0)
+                phase_through(s, row, x, y);
             break;
         }
         if (open_below(s, x, y))            /* held like moss */
             move(s, row, next, x, x, y);
         break;
-    case MOSS:
-        if (s->phase == PHASE_DRAIN && drain_immune(s, x, y))
-            break;
-        if (open_below(s, x, y))            /* held: straight down or not at all */
-            move(s, row, next, x, x, y);
-        break;
     default:
-        if (FALLS(t))
-            fall(s, row, next, x, y);
+        if (FALLS(t) && fall(s, row, next, x, y) < 0)
+            phase_through(s, row, x, y);
         break;
     }
 }
@@ -1379,12 +1455,23 @@ void sim_step(Sim *s)
          * until the screen is overfull. */
         int full = s->grains >= (int)(s->fill_reset * s->w * s->h);
         int hold = full && s->trees > 0;
+        int tried = 0;
         for (int i = 0; i < s->n_emitters; i++)
-            emit(s, &s->em[i], hold ? HOLD_POUR_DIV : 1);
-        if (full && !hold)
+            emit(s, &s->em[i], hold ? HOLD_POUR_DIV : 1, &tried);
+        int stalled = 0;
+        s->stall_tried += tried;
+        if (++s->stall_steps >= STALL_STEPS) {
+            /* A held tree's trickle grows slower, so expect less of it. */
+            float gain = STALL_GAIN / (hold ? HOLD_POUR_DIV : 1);
+            stalled = s->stall_tried > 0 &&
+                      s->grains - s->stall_grains < (int)(gain * s->w * s->h);
+            s->stall_steps = s->stall_tried = 0;
+            s->stall_grains = s->grains;
+        }
+        if ((full && !hold) || stalled)
             sim_start_drain(s);
         else if (hold && s->frame % OVERFILL_STEPS == 0 &&
-                 s->grains + s->water + s->solids > s->drain_overfill * s->w * s->h)
+                 s->grains + s->water + s->solids + s->iron > s->drain_overfill * s->w * s->h)
             sim_start_drain(s);
     } else {
         drain(s);
