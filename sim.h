@@ -154,6 +154,8 @@ typedef struct {
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
     uint8_t dug;            /* digs in place while walking */
+    uint8_t has_patch;      /* planted a seed: patch_x, patch_y is on it */
+    int patch_x, patch_y;   /* top of the middle of its patch's iron */
     uint8_t climbing;       /* clinging to the wall it faces */
     uint8_t thirsty;        /* has a use for water: catches rain */
     int home;               /* index into s->home[], or -1 */
@@ -287,6 +289,7 @@ typedef struct {
     long flung;             /* grains critters flung off ledges */
     long seeds_caught;      /* seeds critters caught */
     long seeded;            /* seeds planted on ledges as iron */
+    long stacked;           /* cells critters stacked to climb */
     uint32_t shower_until[MAX_CRITTERS]; /* a planted seed's shower, by slot */
     int shower_x[MAX_CRITTERS];          /* its middle column */
     int critters;           /* slots in use */

@@ -78,6 +78,8 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
   rain landing on a built home roof moves into that home's well.
 - Iron a critter makes from a seed is `BUILT | SEEDED` iron outside any
   home's plan: nobody mines it, and `rust_iron()` skips `SEEDED` cells.
+  Stairs critters build up to their patch are `BUILT` stone outside any
+  plan too; they crumble at the drain like other stone.
 - Every critter timing goes through `csecs()` (supercharge) except
   falling.
 

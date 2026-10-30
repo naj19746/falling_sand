@@ -408,6 +408,48 @@ Next levers: after a drain, drop a critter back in over its own patch
 instead of anywhere on its side; plant on the ledge it's standing on, or
 low ledges first; or let critters climb up to a ledge some other way.
 
+### Follow-up: staying near the patch, brick stairs
+
+Asked for next: critters stay closer to their ledges, and stack sand to
+get back up when they can't walk there.
+
+- **Staying near:** a critter remembers the patch it planted. It strolls
+  around it, and heads back whenever it's more than 12 columns from it
+  (and from its home) or below it. Back on its patch, it flings any sand
+  piled on it over the edge. After a drain it drops back in over its
+  patch.
+- **Stairs:** below a floating ledge, it builds stairs of brick from the
+  nearer end of the ledge down and out to the ground: step k is k cells
+  out and k down, floating like the ledge. It fetches a grain of sand for
+  each step and lays it from the step below, bottom up, then walks up.
+  The steps are built stone, so they crumble at the drain.
+  - I tried a straight pillar first. A critter that ended up on the
+    ledge side of it was trapped under the ledge, and it kept digging a
+    pit at the pillar's foot. The diagonal stairs avoid both.
+- **Climbing:** critters can now reach one cell above their heads for a
+  hold when climbing.
+- **Patch dirt:** they no longer dig through dirt sitting on iron while
+  walking. They had been kicking their own patch's dirt away.
+- t17: a small and a large critter start on the ground, 31 rows below a
+  floating ledge with their patch on it. Each builds 35 steps and is on
+  its patch in 12-13 minutes, then stays within range for the next 10
+  minutes.
+
+**Realistic matrix (same 8 seeds x 3 days, plus nocommit): the best so
+far, still short of the targets.**
+
+| Scenario | Runs alive at end | Mean life (avg) | Bites per run | Fill held over 3 days |
+|---|---|---|---|---|
+| typical | 3/8 | 1.3-2.8 h (1.7) | 0-15 | 0-3.5 h |
+| showers | 1/8 | 1.3-2.2 h (1.6) | 0-8 | 0-3.5 h |
+| nocommit | 2/8 | 1.2-2.8 h (2.1) | 0-13 | 0-3.5 h |
+| starve240 | 7/8 | 4.0-9.8 h (7.3) | 0-21 | 0.8-9.5 h |
+
+The last round was 0.8-1.3 h mean life with 0-2 bites. Some critters now
+live past the day they arrived, and patches turn to wheat that farms
+hold the fill with. Critters spend about 45% of their time building
+(mostly stairs).
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

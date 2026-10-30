@@ -129,6 +129,13 @@
 #define SHOWER_W    21
 #define SHOWER_SECS 120.0f
 
+/* A critter stays near its patch: within PATCH_RANGE columns of it, or of
+ * its home, and not below it. Below a floating ledge, it builds stairs of
+ * brick up to the nearer end out of sand, fetching a grain and laying it
+ * every STACK_SECS or so, then climbs them across. */
+#define PATCH_RANGE 12
+#define STACK_SECS  1.0f
+
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
  * most once every PLANT_SECS. Dirt isn't food: it still takes water to
@@ -141,7 +148,7 @@
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE, G_SEED, G_PLANT };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE, G_SEED, G_PLANT, G_PATCH };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -331,9 +338,10 @@ static int step_side(Sim *s, int i, int d)
     }
     /* The column it's stepping into, from a step up down to its feet. */
     int nx = d > 0 ? c->x + c->w : c->x - 1;
-    /* Walls and rocks it can clamber up, a cell at a time. */
+    /* Walls and rocks it can clamber up, a cell at a time, reaching up a
+     * cell over its head for a hold. */
     if (nx >= 0 && nx < s->w && fits(s, i, c->x, c->y - 1))
-        for (int y = c->y - c->h + 1; y <= c->y; y++)
+        for (int y = c->y - c->h < 0 ? 0 : c->y - c->h; y <= c->y; y++)
             if (climbable(CELL_TYPE(at(s, nx, y)))) {
                 c->step++;
                 c->climbing = 1;
@@ -348,8 +356,9 @@ static int step_side(Sim *s, int i, int d)
             int t = CELL_TYPE(v);
             if (t == EMPTY || t == WATER)
                 continue;
-            /* It tunnels under a field rather than through it. */
-            if (MOSSY(t))
+            /* It tunnels under a field rather than through it, and leaves
+             * the dirt on iron alone: that's a patch. */
+            if (MOSSY(t) || (EARTH(t) && y + 1 < s->h && CELL_TYPE(at(s, nx, y + 1)) == IRON))
                 continue;
             if (!diggable(t))
                 break;
@@ -1498,15 +1507,22 @@ static int rank_sand(const Sim *s, int x, int y)
     return (t == SAND || t == DEBRIS || t == SHARD) && open_above(s, x, y) ? 0 : -1;
 }
 
-/* The natural stone under the loose pile at (x, y), within LEDGE_PILE:
- * the y of its top, or -1. */
+/* A ledge: natural stone, or iron grown on it from a seed. */
+static int ledge_cell(uint16_t v)
+{
+    return (CELL_TYPE(v) == STONE && !built(v)) ||
+           (CELL_TYPE(v) == IRON && (CELL_COLOR(v) & SEEDED));
+}
+
+/* The ledge under the loose pile at (x, y), within LEDGE_PILE, through
+ * any field on it: the y of its top, or -1. */
 static int ledge_under(const Sim *s, int x, int y)
 {
     for (int k = 0; k <= LEDGE_PILE && y + k < s->h; k++) {
         uint16_t v = at(s, x, y + k);
-        if (CELL_TYPE(v) == STONE && !built(v))
+        if (ledge_cell(v))
             return y + k;
-        if (!FALLS(CELL_TYPE(v)) || MOSSY(CELL_TYPE(v)) || CELL_TYPE(v) == DIRT)
+        if (!FALLS(CELL_TYPE(v)) && !MOSSY(CELL_TYPE(v)))
             return -1;
     }
     return -1;
@@ -1526,8 +1542,8 @@ static int ledge_end(const Sim *s, int x, int y, int d, int *ey)
         if (nx < 0 || nx >= s->w)
             break;
         for (int yy = y - 1; yy <= y + 1 && ny < 0; yy++)
-            if (yy > 0 && yy < s->h && CELL_TYPE(at(s, nx, yy)) == STONE &&
-                !built(at(s, nx, yy)) && CELL_TYPE(at(s, nx, yy - 1)) != STONE)
+            if (yy > 0 && yy < s->h && ledge_cell(at(s, nx, yy)) &&
+                !ledge_cell(at(s, nx, yy - 1)))
                 ny = yy;
         if (ny < 0)
             break;
@@ -1536,6 +1552,115 @@ static int ledge_end(const Sim *s, int x, int y, int d, int *ey)
     }
     *ey = y;
     return x + d;
+}
+
+/* Its patch is still there. */
+static int patch_ok(const Sim *s, const Critter *c)
+{
+    if (!c->has_patch)
+        return 0;
+    uint16_t v = at(s, c->patch_x, c->patch_y);
+    return CELL_TYPE(v) == IRON && (CELL_COLOR(v) & SEEDED);
+}
+
+/* A loose grain in reach to build with: not part of itself, not from
+ * under its feet, and not within 2 columns of column skip (it would dig
+ * a pit at the foot of what it's building). */
+static int grain_in_reach(const Sim *s, int i, int skip, int *gx, int *gy)
+{
+    const Critter *c = &s->crit[i];
+    for (int y = c->y - c->h; y <= c->y + 1; y++)
+        for (int x = c->x - 1; x <= c->x + c->w; x++)
+            if (x >= 0 && x < s->w && y >= 0 && y < s->h && abs(x - skip) > 2 &&
+                !(y == c->y + 1 && x >= c->x && x < c->x + c->w) &&
+                diggable(CELL_TYPE(at(s, x, y))) && !own(s, i, x, y)) {
+                *gx = x;
+                *gy = y;
+                return 1;
+            }
+    return 0;
+}
+
+/* Back to its patch. Up level with it, it walks across. Below a floating
+ * ledge, it builds stairs of brick from the nearer end down and out to
+ * the ground: step k is k cells out and k cells down from the end of the
+ * ledge's top, floating like the ledge. It lays them from the bottom up,
+ * a grain of sand fetched for each, standing on the step below. */
+static void go_patch(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    if (!patch_ok(s, c)) {
+        c->has_patch = 0;
+        end_goal(s, c);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    int px = c->patch_x, py = c->patch_y;
+    if (c->y < py) {
+        if (abs(c->x - px) <= 2 || !step_side(s, i, px < c->x ? -1 : 1))
+            if (abs(c->x - px) <= 2 || ++c->stuck >= STUCK_MOVES)
+                end_goal(s, c);
+        return;
+    }
+    int ly, ry, lx = ledge_end(s, px, py, -1, &ly), rx = ledge_end(s, px, py, 1, &ry);
+    int left = rx >= s->w || (lx >= 0 && abs(c->x - lx) <= abs(c->x - rx));
+    int col = left ? lx : rx, top = left ? ly : ry, d = left ? -1 : 1;
+    /* The lowest step still missing, of those above the ground, and the
+     * last one needed. */
+    int next = -1, last = -1;
+    for (int k = 0;; k++) {
+        int x = col + d * k, y = top + k;
+        if (x < 0 || x >= s->w || y >= s->h)
+            break;
+        uint16_t v = at(s, x, y);
+        if (CELL_TYPE(v) != EMPTY && !(CELL_TYPE(v) == STONE && built(v)))
+            break;                  /* down to the ground */
+        last = k;
+        if (CELL_TYPE(v) == EMPTY)
+            next = k;
+    }
+    /* Under the ledge: out past the stairs first. */
+    if (left ? c->x > col : c->x + c->w - 1 < col) {
+        int x0 = c->x, y0 = c->y;
+        step_side(s, i, d);
+        if (c->x == x0 && c->y == y0 && ++c->stuck >= 4 * STUCK_MOVES)
+            fail_goal(s, c);
+        return;
+    }
+    if (next >= 0 && !c->carry) {
+        int gx, gy;
+        if (grain_in_reach(s, i, -100, &gx, &gy)) {
+            c->carry = at(s, gx, gy);
+            set_cell(s, gx, gy, CELL(EMPTY, 0));
+            c->work_until = s->frame + csecs(s, c, STACK_SECS);
+            return;
+        }
+    }
+    if (c->carry && !diggable(CELL_TYPE(c->carry)) && CELL_TYPE(c->carry) != STONE) {
+        drop_carry(s, c);
+        return;
+    }
+    int bx = col + d * (next < 0 ? 0 : next), by = top + (next < 0 ? 0 : next);
+    if (next >= 0 && c->carry && in_reach(c, bx, by) && CELL_TYPE(at(s, bx, by)) == EMPTY) {
+        set_cell(s, bx, by, CELL(STONE, (CELL_COLOR(c->carry) & 0x7F) | BUILT));
+        c->carry = 0;
+        c->work_until = s->frame + csecs(s, c, STACK_SECS);
+        s->stacked++;
+        return;
+    }
+    /* Which step it's by, from the column nearest the ledge: under the
+     * stairs it walks out past their foot; on them, or past their foot,
+     * it walks up them with a grain, or down them for one. */
+    int k = ((d < 0 ? c->x + c->w - 1 : c->x) - col) * d;
+    int under = k >= 0 && k <= last && c->y >= top + k;
+    int way = under || (next >= 0 && !c->carry) ? d : -d;
+    int x0 = c->x, y0 = c->y;
+    step_side(s, i, way);
+    if (c->x != x0 || c->y != y0)
+        c->stuck = 0;
+    else if (++c->stuck >= 4 * STUCK_MOVES)
+        fail_goal(s, c);
 }
 
 /* Scoop the sand at the goal off the ledge and fling it past the nearer
@@ -1640,6 +1765,10 @@ static void plant_seed(Sim *s, int i)
     s->seeded++;
     s->shower_until[i] = s->frame + (uint32_t)secs(s, SHOWER_SECS);
     s->shower_x[i] = c->tx;
+    c->has_patch = 1;
+    c->patch_x = c->tx;
+    c->patch_y = top;
+    c->ax = c->tx;
     end_goal(s, c);
 }
 
@@ -1944,6 +2073,24 @@ static void think(Sim *s, int i)
     if (c->home < 0)
         settle(s, i);
     Home *h = c->home >= 0 ? &s->home[c->home] : NULL;
+
+    /* Stay near its patch (or its home), and not below the patch. */
+    if (patch_ok(s, c)) {
+        int far = abs(c->x - c->patch_x) > PATCH_RANGE &&
+                  (!h || c->x < h->x - PATCH_RANGE || c->x > h->x + home_w(h) + PATCH_RANGE);
+        if ((far || c->y > c->patch_y) && !avoided(s, c, c->patch_x, c->patch_y)) {
+            set_goal(s, c, G_PATCH, c->patch_x, c->patch_y);
+            return;
+        }
+        /* There: sand piled on it goes over the edge. */
+        if (abs(c->x - c->patch_x) <= PATCH_RANGE && find_best(s, i, rank_ledge, &fx, &fy) &&
+            abs(fx - c->patch_x) <= SEED_IRON) {
+            set_goal(s, c, G_LEDGE, fx, fy);
+            return;
+        }
+    } else {
+        c->has_patch = 0;
+    }
 
     if (h && (next_clear(s, h, &fx, &fy) || roof_junk(s, h, &fx, &fy) ||
               wall_bank(s, h, &fx, &fy) || field_junk(s, h, &fx, &fy)) &&
@@ -2314,6 +2461,9 @@ static void critter_tick(Sim *s, int i)
         if (approach(s, i))
             plant_seed(s, i);
         break;
+    case G_PATCH:
+        go_patch(s, i);
+        break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,
          * it waits where it is. */
@@ -2468,6 +2618,9 @@ void critters_refill(Sim *s)
             c->x = (int)(rnd(s) % (uint32_t)(s->w / 2 - c->w));
             if (c->face < 0)
                 c->x = s->w - c->w - c->x;
+            /* Over its patch if it has one: it lands on it. */
+            if (patch_ok(s, c))
+                c->x = c->patch_x < s->w - c->w ? c->patch_x : s->w - c->w;
             for (int k = 0; k < SENSE && !fits(s, i, c->x, c->y); k++)
                 c->x += c->face;
             if (!fits(s, i, c->x, c->y))
