@@ -20,6 +20,9 @@
 #define WET_SECS    (10 * 60)
 #define MOSS_SECS   (30 * 60)
 
+/* A dead critter's body rots into dirt after this long. */
+#define BODY_ROT_SECS (30 * 60)
+
 /* A drop soaking into dirt wets the dirt within WET_SPOT cells of where it
  * landed (and keeps wet dirt there wet); a drop landing on wet dirt grows
  * moss on the wet dirt within MOSS_SPOT. */
@@ -144,7 +147,8 @@ static uint32_t rain_near(Sim *s, int x, int y)
 }
 
 /* Visit every SWEEP_ROWS-th row, a different set each step, drying out
- * wet dirt and moss whose time is up. Works on sleeping chunks too. */
+ * wet dirt and moss whose time is up and rotting bodies into dirt. Works
+ * on sleeping chunks too. */
 static void age_damp(Sim *s)
 {
     for (int y = s->frame % SWEEP_ROWS; y < s->h; y += SWEEP_ROWS) {
@@ -160,6 +164,8 @@ static void age_damp(Sim *s)
                     since[x] = rained;      /* check again 30 min after it */
                 else
                     set_cell(s, x, y, CELL(WET_DIRT, CELL_COLOR(row[x])));
+            } else if (t == BODY && s->clock - since[x] >= BODY_ROT_SECS) {
+                set_cell(s, x, y, CELL(DIRT, rnd(s) & 0xFF));
             }
         }
     }
@@ -727,7 +733,7 @@ static void phase_through(Sim *s, uint16_t *row, int x, int y)
     uint16_t c = row[x];
     row[x] = s->cells[j];
     s->cells[j] = c;
-    if (DAMP(CELL_TYPE(c)))
+    if (AGES(CELL_TYPE(c)))
         s->since[j] = s->since[y * w + x];
     if (CELL_TYPE(c) == WATER) {
         s->moved[j] = (uint8_t)s->frame;
@@ -1364,7 +1370,7 @@ void sim_step(Sim *s)
         evaporate(s);
         drain_floor(s);
     }
-    if (s->damp)
+    if (s->damp || s->bodies)
         age_damp(s);
     if (s->glass)
         load_glass(s);

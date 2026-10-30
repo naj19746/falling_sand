@@ -145,6 +145,10 @@ typedef struct {
     uint16_t carry;         /* the cell it's holding, or 0 */
     int goal, tx, ty;       /* what it's doing and where */
     int stuck;              /* moves without progress toward the goal */
+    int best;               /* closest it has got to the goal */
+    int avoid_x, avoid_y;   /* a spot it gave up on, */
+    uint32_t avoid_until;   /* left alone until then */
+    uint8_t eating;         /* keeps eating until full */
     int home;               /* index into s->home[], or -1 */
     uint32_t buried_steps;  /* steps spent buried */
     uint32_t next_think;    /* sim frame of the next decision */

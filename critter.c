@@ -25,10 +25,28 @@
 #define CHARGE_MINUTES 10
 #define CHARGE_SPEEDUP 3
 
-/* Moves without getting closer before a critter gives up on its goal. */
+/* Moves without getting closer before a critter gives up on its goal,
+ * and how long it then leaves that spot alone. */
 #define STUCK_MOVES 6
+#define AVOID_SECS  30.0f
 
-enum { G_NONE, G_WANDER };
+/* How far around itself a critter looks for things. */
+#define SENSE       40
+
+/* Food: hungry below EAT_BELOW, eats until above FULL_ABOVE. A bite takes
+ * EAT_SECS; moss is MOSS_MEAL of a full stomach. A small critter burns
+ * SMALL_BURN as fast as a large one. */
+#define EAT_BELOW   0.5f
+#define FULL_ABOVE  0.9f
+#define EAT_SECS    2.0f
+#define MOSS_MEAL   0.25f
+#define SMALL_BURN  0.6f
+
+/* Dying takes DIE_MOVES moves; bodies rot into dirt after BODY_ROT_MINUTES
+ * of wall-clock time (sim.c sweeps them). */
+#define DIE_MOVES   3
+
+enum { G_NONE, G_WANDER, G_EAT, G_DIE };
 
 static int secs(const Sim *s, float sec)
 {
@@ -97,7 +115,7 @@ static int supported(const Sim *s, const Critter *c)
 static int part_at(const Critter *c, int dx, int dy)
 {
     if (dy == 0) {
-        if (c->w == 1)
+        if (c->w == 1 || c->face == 0)     /* no eye showing, or closed */
             return PART_HEAD;
         return (dx == 1) == (c->face > 0) ? PART_EYE : PART_HEAD;
     }
@@ -144,14 +162,11 @@ static void relocate(Sim *s, int i, int nx, int ny)
                 set_cell(s, xx, yy, water[--nw] & ~(SEEPING << 8));
 }
 
-/* One step toward tx: straight across, or up a one-cell step. Returns 1
- * if it moved. Blocked, it turns around. */
-static int step_toward(Sim *s, int i)
+/* Move one cell sideways (d = -1 or 1): straight across, or up a
+ * one-cell step. Returns 1 if it moved. */
+static int step_side(Sim *s, int i, int d)
 {
     Critter *c = &s->crit[i];
-    int d = c->tx < c->x ? -1 : c->tx > c->x ? 1 : 0;
-    if (d == 0)
-        return 0;
     c->face = (int8_t)d;
     if (fits(s, i, c->x + d, c->y)) {
         c->step++;
@@ -163,35 +178,252 @@ static int step_toward(Sim *s, int i)
         relocate(s, i, c->x + d, c->y - 1);
         return 1;
     }
-    c->face = (int8_t)-d;
     draw(s, i);
     return 0;
 }
 
-/* Choose what to do next. */
+/* Cells critter c can touch without moving: its own body and the ring
+ * of cells around it. */
+static int in_reach(const Critter *c, int x, int y)
+{
+    return x >= c->x - 1 && x <= c->x + c->w && y >= c->y - c->h && y <= c->y + 1;
+}
+
+/* Steps from critter c's reach to (x, y), roughly. */
+static int dist(const Critter *c, int x, int y)
+{
+    int dx = x < c->x - 1 ? c->x - 1 - x : x > c->x + c->w ? x - c->x - c->w : 0;
+    int dy = y < c->y - c->h ? c->y - c->h - y : y > c->y + 1 ? y - c->y - 1 : 0;
+    return dx + dy;
+}
+
+static void set_goal(Sim *s, Critter *c, int goal, int tx, int ty)
+{
+    (void)s;
+    c->goal = goal;
+    c->tx = tx;
+    c->ty = ty;
+    c->stuck = 0;
+    c->best = dist(c, tx, ty);
+    c->work_until = 0;
+    c->state = CR_WALK;
+}
+
+/* Done with the goal (or giving up on it): think again next move. */
+static void end_goal(Sim *s, Critter *c)
+{
+    c->goal = G_NONE;
+    c->state = CR_IDLE;
+    c->work_until = 0;
+    c->next_think = s->frame;
+}
+
+/* Give up on the goal's spot for a while. */
+static void fail_goal(Sim *s, Critter *c)
+{
+    c->avoid_x = c->tx;
+    c->avoid_y = c->ty;
+    c->avoid_until = s->frame + csecs(s, c, AVOID_SECS);
+    end_goal(s, c);
+}
+
+/* One move toward the goal cell. Returns 1 once it's in reach, 0 while
+ * still on the way; gives up on the goal after STUCK_MOVES moves that
+ * don't get it any closer. */
+static int approach(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    if (in_reach(c, c->tx, c->ty))
+        return 1;
+    int d = c->tx < c->x ? -1 : c->tx >= c->x + c->w ? 1 : 0;
+    /* Right above or below it but out of reach: step aside and look
+     * again, so it can drop into a hollow. */
+    if (d == 0)
+        d = c->face;
+    step_side(s, i, d);
+    int now = dist(c, c->tx, c->ty);
+    if (now < c->best) {
+        c->best = now;
+        c->stuck = 0;
+    } else if (++c->stuck >= STUCK_MOVES) {
+        fail_goal(s, c);
+    }
+    return 0;
+}
+
+static int avoided(const Sim *s, const Critter *c, int x, int y)
+{
+    return s->frame < c->avoid_until && abs(x - c->avoid_x) <= 1 && abs(y - c->avoid_y) <= 1;
+}
+
+/* Open to a critter: something it could stand in or next to. */
+static int exposed(const Sim *s, int i, int x, int y)
+{
+    static const int nb[4][2] = {{0, -1}, {-1, 0}, {1, 0}, {0, 1}};
+    for (int k = 0; k < 4; k++) {
+        int xx = x + nb[k][0], yy = y + nb[k][1];
+        if (xx < 0 || xx >= s->w || yy < 0 || yy >= s->h)
+            continue;
+        int t = CELL_TYPE(at(s, xx, yy));
+        if (t == EMPTY || t == WATER || own(s, i, xx, yy))
+            return 1;
+    }
+    return 0;
+}
+
+/* Nearest exposed cell of the given type within SENSE. Returns 0 if none. */
+static int find_near(Sim *s, int i, int type, int *fx, int *fy)
+{
+    Critter *c = &s->crit[i];
+    int best = 1 << 30;
+    int x0 = c->x - SENSE, x1 = c->x + SENSE, y0 = c->y - SENSE, y1 = c->y + SENSE;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= s->w) x1 = s->w - 1;
+    if (y1 >= s->h) y1 = s->h - 1;
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++) {
+            if (CELL_TYPE(at(s, x, y)) != type)
+                continue;
+            int d = dist(c, x, y);
+            if (d >= best || avoided(s, c, x, y) || !exposed(s, i, x, y))
+                continue;
+            best = d;
+            *fx = x;
+            *fy = y;
+        }
+    return best < (1 << 30);
+}
+
+static int find_food(Sim *s, int i, int *fx, int *fy)
+{
+    return find_near(s, i, MOSS, fx, fy);
+}
+
+/* At the food: take a bite every EAT_SECS until full. */
+static void eat(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    int t = CELL_TYPE(at(s, c->tx, c->ty));
+    if (t != MOSS) {
+        end_goal(s, c);
+        return;
+    }
+    c->state = CR_EAT;
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, EAT_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    uint16_t v = at(s, c->tx, c->ty);
+    set_cell(s, c->tx, c->ty, CELL(WET_DIRT, CELL_COLOR(v)));
+    c->food += MOSS_MEAL;
+    if (c->food > 1.0f)
+        c->food = 1.0f;
+    end_goal(s, c);
+}
+
+/* Choose what to do next. A goal in progress is only interrupted for a
+ * stroll. */
 static void think(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
+    int fx, fy;
     c->next_think = s->frame + csecs(s, c, THINK_SECS);
-    if (c->goal != G_NONE)
+    if (c->goal != G_NONE && c->goal != G_WANDER)
         return;
-    if (s->frame < c->work_until)
+
+    int hungry = c->food < EAT_BELOW || (c->eating && c->food < FULL_ABOVE);
+    c->eating = (uint8_t)hungry;
+    if (hungry && find_food(s, i, &fx, &fy)) {
+        set_goal(s, c, G_EAT, fx, fy);
         return;
-    c->goal = G_WANDER;
-    c->tx = c->x + (int)(rnd(s) % (2 * WANDER + 1)) - WANDER;
-    if (c->tx < 0) c->tx = 0;
-    if (c->tx > s->w - c->w) c->tx = s->w - c->w;
-    c->ty = c->y;
+    }
+
+    if (c->goal != G_NONE || s->frame < c->work_until)
+        return;
+    int tx = c->x + (int)(rnd(s) % (2 * WANDER + 1)) - WANDER;
+    if (tx < 0) tx = 0;
+    if (tx > s->w - c->w) tx = s->w - c->w;
+    set_goal(s, c, G_WANDER, tx, c->y);
+}
+
+static void free_slot(Sim *s, int i)
+{
+    memset(&s->crit[i], 0, sizeof s->crit[i]);
+    s->critters--;
+}
+
+/* Lay the body down as a line of BODY cells, one wider than the critter,
+ * along its bottom row where that fits, else in its own column. */
+static void lay_body(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    int n = c->w + 1, y = c->y;
+    for (int yy = c->y - c->h + 1; yy <= c->y; yy++)
+        for (int xx = c->x; xx < c->x + c->w; xx++)
+            set_cell(s, xx, yy, CELL(EMPTY, 0));
+    int x0 = -1;
+    for (int k = 0; k < 2 && x0 < 0; k++) {
+        int x = k == 0 ? c->x : c->x - 1;
+        int ok = x >= 0 && x + n <= s->w;
+        for (int xx = x; ok && xx < x + n; xx++)
+            ok = CELL_TYPE(at(s, xx, y)) == EMPTY;
+        if (ok)
+            x0 = x;
+    }
+    for (int k = 0; k < n; k++) {
+        int x = x0 >= 0 ? x0 + k : c->x + k % c->w;
+        int yy = x0 >= 0 ? y : y - k / c->w;
+        set_cell(s, x, yy, CELL(BODY, rnd(s) & 0x7F));
+    }
+}
+
+/* Crumpling over: the eye closes and the body goes grey, then it lies
+ * down. */
+static void die_step(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    c->state = CR_DYING;
+    c->spark = 0;
+    if (++c->stuck < DIE_MOVES) {
+        c->face = 0;
+        c->step = 0;
+        draw(s, i);
+        return;
+    }
+    lay_body(s, i);
+    free_slot(s, i);
+}
+
+static void start_dying(Sim *s, Critter *c)
+{
+    c->goal = G_DIE;
     c->stuck = 0;
-    c->state = CR_WALK;
+    c->next_move = s->frame;
 }
 
 static void critter_tick(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
 
+    if (c->goal != G_DIE) {
+        float burn = 1.0f / ((float)s->starve_minutes * 60.0f * s->steps_per_sec);
+        c->food -= c->kind == CR_SMALL ? burn * SMALL_BURN : burn;
+        if (c->food <= 0.0f) {
+            c->food = 0.0f;
+            start_dying(s, c);
+        }
+    }
     if (s->frame < c->next_move)
         return;
+    if (c->goal == G_DIE) {
+        die_step(s, i);
+        if (s->crit[i].state != CR_FREE)
+            c->next_move = s->frame + secs(s, MOVE_SECS);
+        return;
+    }
     /* A charged critter's body crackles every move, even standing still;
      * when the charge runs out it goes back to normal. */
     int spark = charged(s, c) ? !c->spark : 0;
@@ -211,22 +443,21 @@ static void critter_tick(Sim *s, int i)
 
     if (s->frame >= c->next_think)
         think(s, i);
+    c->next_move = s->frame + csecs(s, c, MOVE_SECS);
 
     switch (c->goal) {
-    case G_WANDER: {
-        int before = abs(c->tx - c->x);
-        if (before == 0 || !step_toward(s, i)) {
-            if (before == 0 || ++c->stuck >= STUCK_MOVES) {
-                c->goal = G_NONE;
-                c->state = CR_IDLE;
+    case G_WANDER:
+        if (c->x == c->tx || !step_side(s, i, c->tx < c->x ? -1 : 1)) {
+            if (c->x == c->tx || ++c->stuck >= STUCK_MOVES) {
+                end_goal(s, c);
                 c->work_until = s->frame + csecs(s, c, IDLE_SECS * (0.5f + rndf(s)));
+                c->next_think = s->frame + csecs(s, c, THINK_SECS);
             }
         }
-        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
         break;
-    }
-    default:
-        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
+    case G_EAT:
+        if (approach(s, i))
+            eat(s, i);
         break;
     }
 }

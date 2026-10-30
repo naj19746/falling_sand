@@ -7,6 +7,9 @@
 
 #include <string.h>
 
+/* Cells that read their since[] time, so it moves with them. */
+#define AGES(t) (DAMP(t) || (t) == BODY)
+
 /* A chunk keeps being scanned this many steps after its last change. */
 #define WAKE_STEPS 2
 
@@ -79,7 +82,7 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
     s->bodies += (new == BODY) - (old == BODY);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
-    if (DAMP(new))
+    if (DAMP(new) || new == BODY)
         s->since[idx] = s->clock;
     *cell = v;
     /* The kept mask follows the type: a kept cell that turns into
@@ -123,9 +126,9 @@ static inline void move(Sim *s, uint16_t *row, uint16_t *next, int x, int nx, in
     uint16_t c = row[x];
     row[x] = next[nx];
     next[nx] = c;
-    /* Only wet dirt and moss read their time, and what they swap with
-     * (empty, water, or sand under seeping water) never does. */
-    if (DAMP(CELL_TYPE(c)))
+    /* Only damp cells and bodies read their time, and what they swap
+     * with (empty, water, or sand under seeping water) never does. */
+    if (AGES(CELL_TYPE(c)))
         s->since[(y + 1) * s->w + nx] = s->since[y * s->w + x];
     mark(s, x, y);
     mark(s, nx, y + 1);
