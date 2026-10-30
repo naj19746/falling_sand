@@ -110,6 +110,7 @@ sandbg --meter           # live audio level, as the blaster sees it
 sandbg --spotify         # what Spotify is playing, and each finished song
 sandbg --strike          # fire one lightning strike at the running copy
 sandbg --critter         # drop a critter into the running copy
+sandbg --progress        # what earns critters: drawings, and critters waiting
 sandbg --keyboard        # show the Keychron LED interface and keymap status
 sandbg --keyboard-preview  # run with the LED colors drawn in the terminal
 sandbg --profile         # print frame timings every 5 seconds
@@ -161,7 +162,9 @@ other models would need their LED layout added to `keyboard.c`.
 
 Your configured location is sent to Open-Meteo every 10 minutes. Nothing
 else leaves the machine: audio levels are read from PulseAudio and Spotify
-is read over D-Bus, both locally.
+is read over D-Bus, and Pixelorama's config.ini is read for newly saved
+drawings, all locally. What's been counted is kept in
+`~/.local/state/sandbg/progress`.
 
 ## Limitations
 

@@ -12,6 +12,7 @@
 #include "audio.h"
 #include "config.h"
 #include "keyboard.h"
+#include "progress.h"
 #include "render.h"
 #include "sim.h"
 #include "spotify.h"
@@ -31,6 +32,9 @@
  * one per commit), and they go off at least this far apart. */
 #define LIGHTNING_BACKLOG 5
 #define LIGHTNING_GAP_MS  400
+
+/* Earned critters drop in at least this far apart. */
+#define CRITTER_GAP_MS    2000
 
 /* Blaster level smoothing per frame: jump up fast on hits, fall slowly. */
 #define LEVEL_ATTACK    0.6f
@@ -114,6 +118,7 @@ static void usage(const char *prog)
            "  --spotify         show what Spotify is playing and each finished song\n"
            "  --strike          make the running sandbg fire a bolt of lightning\n"
            "  --critter         make the running sandbg drop in a critter\n"
+           "  --progress        show the kana sets and drawings that earn critters\n"
            "  --keyboard        show the Keychron LEDs and whether the keymap is loaded\n"
            "  --keyboard-preview  draw a colored keyboard map in the terminal\n"
            "\n"
@@ -229,7 +234,7 @@ int main(int argc, char **argv)
 {
     int mode = MODE_DESKTOP;
     unsigned long wid = 0;
-    int profile = 0, show_weather = 0, show_keyboard = 0;
+    int profile = 0, show_weather = 0, show_keyboard = 0, show_progress = 0;
     Config cfg;
     config_defaults(&cfg);
 
@@ -271,6 +276,8 @@ int main(int argc, char **argv)
             cfg.audio = 0;
         } else if (strcmp(arg, "--weather") == 0) {
             show_weather = 1;
+        } else if (strcmp(arg, "--progress") == 0) {
+            show_progress = 1;
         } else if (strcmp(arg, "--profile") == 0) {
             profile = 1;
         } else if (strcmp(arg, "--meter") == 0) {
@@ -322,6 +329,8 @@ int main(int argc, char **argv)
         return run_weather(&cfg);
     if (show_keyboard)
         return keyboard_probe(cfg.keyboard_device);
+    if (show_progress)
+        return progress_print(cfg.kana_url, cfg.pixelorama_config);
 
     if (mode == MODE_DESKTOP && take_desktop_lock() != 0) {
         fprintf(stderr, "sandbg is already running on the desktop\n");
@@ -419,6 +428,11 @@ int main(int argc, char **argv)
         else
             fprintf(stderr, "spotify: %s (continuing without)\n", SDL_GetError());
     }
+
+    /* Critters earned by kana sets and drawings. */
+    int use_progress = cfg.critters &&
+        progress_start(cfg.kana_url, cfg.pixelorama_config) == 0;
+    Uint64 next_reward = 0;
 
     float steps_per_min = 60.0f * cfg.fps * cfg.steps_per_frame;
     if (cfg.rain_override >= 0)
@@ -527,6 +541,15 @@ int main(int argc, char **argv)
             int crit = critters_requested;
             for (; critters_sent < crit; critters_sent++)
                 sim_add_critter(&sim, CR_ANY);
+
+            /* An earned critter waits its turn, and for a free slot. */
+            int kind = use_progress && start >= next_reward ? progress_next()
+                                                            : PROGRESS_NONE;
+            if (kind != PROGRESS_NONE) {
+                if (sim_add_critter(&sim, kind) >= 0)
+                    progress_dropped();
+                next_reward = start + CRITTER_GAP_MS;
+            }
         }
 
         Uint64 t0 = SDL_GetPerformanceCounter();

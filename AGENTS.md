@@ -33,6 +33,7 @@ x11.c/.h    desktop window properties, the "is the desktop covered" check
 audio.c/.h  PulseAudio loudness of the output (background thread)
 weather.c/.h  Open-Meteo via curl → drops per minute (background thread)
 spotify.c/.h  Spotify over D-Bus MPRIS → count of songs finished (background thread)
+progress.c/.h  new Pixelorama drawings → critters waiting to drop in (background thread)
 config.c/.h ini parsing, defaults, validation
 keyboard.c/.h  Keychron Q4 per-key LEDs: screen -> keys, raw HID protocol
 firmware/keychron-q4-sandbg/  the QMK keymap the keyboard needs for per-key control

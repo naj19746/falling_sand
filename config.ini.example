@@ -98,7 +98,8 @@ keyboard_device =
 ; well and build huts from stone and iron (see CRITTERS.md). They're earned:
 ; finishing a kana practice set (5 min: 1 half the time, 10 min: 1,
 ; 15 min: 2) or saving a new Pixelorama drawing drops one in. The c key
-; and `sandbg --critter` drop one by hand.
+; and `sandbg --critter` drop one by hand. Check what sandbg sees with:
+; sandbg --progress
 critters = true
 ; Most critters alive at once (1-32). More wait until there's room.
 critter_max = 24
