@@ -236,6 +236,7 @@ int sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters)
     s->tree_thirst_minutes = 22;
     s->drain_overfill = 0.8f;
     s->steps_per_sec = 60;
+    s->critters_on = 1;
     s->critter_max = 24;
     s->starve_minutes = 40;
     s->wheat_per_pour = 3;
@@ -282,6 +283,7 @@ void sim_reset(Sim *s)
     s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;
+    reset_critters(s);
     wake_all(s);
     for (int i = 0; i < s->n_emitters; i++) {
         s->em[i].burst_left = 0;
@@ -342,7 +344,7 @@ static void clear_unkept(Sim *s)
         if (s->keep && s->keep[i])
             continue;
         int t = CELL_TYPE(s->cells[i]);
-        if (t != EMPTY)
+        if (t != EMPTY && t != CRITTER)
             set_cell(s, i % s->w, i / s->w, CELL(EMPTY, 0));
     }
     for (int i = 0; i < s->n_emitters; i++) {
@@ -1368,6 +1370,8 @@ void sim_step(Sim *s)
         load_glass(s);
     if (s->trees)
         update_trees(s);
+    if (s->critters)
+        update_critters(s);
 
     if (s->blaster_on || s->lightning_on)
         blaster_move(s);
@@ -1417,6 +1421,8 @@ void sim_paint(Sim *s, int cx, int cy, int radius, int type)
             if (dx * dx + dy * dy > radius * radius)
                 continue;
             uint16_t cell = s->cells[y * s->w + x];
+            if (CELL_TYPE(cell) == CRITTER)
+                continue;
             if (type == SAND) {
                 /* Sprinkle rather than fill solid. */
                 if (CELL_TYPE(cell) == EMPTY && (rnd(s) & 3) == 0)

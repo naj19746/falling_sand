@@ -127,6 +127,30 @@ typedef struct {
     int16_t cx[TREE_CELLS], cy[TREE_CELLS];
 } Tree;
 
+/* Critters (critter.c): small creatures with bodies in the grid. Each
+ * keeps its slot from arriving until it dies. */
+#define MAX_CRITTERS 24
+enum { CR_FREE, CR_FALLING, CR_IDLE, CR_WALK, CR_EAT, CR_FETCH, CR_CARRY,
+       CR_MINE, CR_BUILD, CR_DIG, CR_DYING, CR_AWAY };
+typedef struct {
+    int state;
+    int x, y;               /* bottom-left cell of the body */
+    int kind;               /* CR_SMALL (1x2) or CR_LARGE (2x3), for life */
+    int w, h;               /* from kind */
+    int8_t face;            /* -1 left, 1 right */
+    uint8_t step;           /* walking animation */
+    float food;             /* 0..1; starves at 0 */
+    uint32_t charged_until; /* sim frame; supercharged until then */
+    uint16_t carry;         /* the cell it's holding, or 0 */
+    int goal, tx, ty;       /* what it's doing and where */
+    int stuck;              /* moves without progress toward the goal */
+    int home;               /* index into s->home[], or -1 */
+    uint32_t buried_steps;  /* steps spent buried */
+    uint32_t next_think;    /* sim frame of the next decision */
+    uint32_t next_move;     /* sim frame of the next move or fall */
+    uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
+} Critter;
+
 enum { PHASE_FILL, PHASE_DRAIN };
 
 typedef struct {
@@ -206,6 +230,8 @@ typedef struct {
     int critter_max;        /* most alive at once, up to MAX_CRITTERS */
     int starve_minutes;     /* sim minutes from full to starving */
     int wheat_per_pour;     /* stock levels one pour adds */
+    Critter crit[MAX_CRITTERS];
+    int critters;           /* slots in use */
 } Sim;
 
 int  sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters);
@@ -226,6 +252,8 @@ enum { CR_ANY = -1, CR_SMALL, CR_LARGE };
 /* Drop a new critter from the top of the screen. Returns its slot, or -1
  * if there's no room for it. */
 int  sim_add_critter(Sim *s, int kind);
+void update_critters(Sim *s);           /* called by sim_step */
+void reset_critters(Sim *s);            /* called by sim_reset */
 
 /* Chunks currently being simulated, for --profile. */
 int  sim_awake_chunks(const Sim *s);
