@@ -150,6 +150,7 @@ typedef struct {
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
     int home;               /* index into s->home[], or -1 */
+    int ax;                 /* where it strolls around: home, or its food */
     uint32_t buried_steps;  /* steps spent buried */
     uint32_t next_think;    /* sim frame of the next decision */
     uint32_t next_move;     /* sim frame of the next move or fall */
@@ -237,6 +238,8 @@ typedef struct {
     int starve_minutes;     /* sim minutes from full to starving */
     int wheat_per_pour;     /* stock levels one pour adds */
     Critter crit[MAX_CRITTERS];
+    /* Farming counts, for checking that only pours make wheat. */
+    long pours, pour_converted, pour_levels, bites, rotted;
     int critters;           /* slots in use */
 } Sim;
 

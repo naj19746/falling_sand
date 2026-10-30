@@ -20,6 +20,9 @@
 #define WET_SECS    (10 * 60)
 #define MOSS_SECS   (30 * 60)
 
+/* Wheat nobody has poured on loses a level this often, in sim time. */
+#define WHEAT_ROT_SECS (3 * 3600)
+
 /* A dead critter's body rots into dirt after this long. */
 #define BODY_ROT_SECS (30 * 60)
 
@@ -151,6 +154,7 @@ static uint32_t rain_near(Sim *s, int x, int y)
  * on sleeping chunks too. */
 static void age_damp(Sim *s)
 {
+    uint32_t now = s->frame / (uint32_t)s->steps_per_sec;
     for (int y = s->frame % SWEEP_ROWS; y < s->h; y += SWEEP_ROWS) {
         uint16_t *row = s->cells + y * s->w;
         uint32_t *since = s->since + y * s->w;
@@ -164,6 +168,17 @@ static void age_damp(Sim *s)
                     since[x] = rained;      /* check again 30 min after it */
                 else
                     set_cell(s, x, y, CELL(WET_DIRT, CELL_COLOR(row[x])));
+            } else if (t == WHEAT && now - since[x] >= WHEAT_ROT_SECS) {
+                /* Unwatered wheat fades a level at a time, back to moss.
+                 * Its time is in sim seconds: it doesn't rot overnight. */
+                int k = WHEAT_STOCK(row[x]);
+                uint32_t next = since[x] + WHEAT_ROT_SECS;
+                if (k > 0)
+                    set_cell(s, x, y, CELL(WHEAT, CELL_COLOR(row[x]) - 1));
+                else
+                    set_cell(s, x, y, CELL(MOSS, CELL_COLOR(row[x]) & ~WHEAT_MAX));
+                since[x] = k > 0 ? next : s->clock;
+                s->rotted += k > 0;
             } else if (t == BODY && s->clock - since[x] >= BODY_ROT_SECS) {
                 set_cell(s, x, y, CELL(DIRT, rnd(s) & 0xFF));
             }

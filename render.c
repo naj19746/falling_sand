@@ -203,16 +203,17 @@ static void build_wheat(uint32_t *pal)
     }
 }
 
-/* Critter parts, each slot tinted a little differently so neighbors can
- * be told apart. */
+/* Critter parts: a pale head over a violet body, which stands out from
+ * every sand palette and the dirt and moss. Each slot is tinted a little
+ * differently so neighbors can be told apart. */
 static void build_critter(uint32_t *pal)
 {
     static const int part[6][3] = {
-        {236, 196, 150},    /* head */
+        {242, 238, 224},    /* head */
         { 24,  20,  28},    /* eye */
-        {206, 130,  84},    /* body */
-        {120,  76,  48},    /* leg */
-        {150,  98,  62},    /* leg, other step */
+        {150, 104, 190},    /* body */
+        { 92,  62, 120},    /* leg */
+        {118,  84, 150},    /* leg, other step */
         {200, 232, 255},    /* spark */
     };
     for (int i = 0; i < 256; i++) {

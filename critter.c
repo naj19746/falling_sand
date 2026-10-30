@@ -53,7 +53,16 @@
 #define BURY_SECS   60.0f
 #define DIG_SECS    1.0f
 
-enum { G_NONE, G_WANDER, G_EAT, G_DIE };
+/* Farming: a pour of water adds wheat_per_pour stock levels to the field
+ * within FIELD_SPOT cells of where it lands, turning moss there into
+ * wheat first. A bite of wheat is one level, WHEAT_BITE of a meal.
+ * Critters keep FIELD_RESERVE_HOURS of what they eat stocked. */
+#define FIELD_SPOT  3
+#define WHEAT_BITE  (1.0f / 3)
+#define FIELD_RESERVE_HOURS 2.0f
+#define POUR_SECS   1.0f
+
+enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM };
 
 static int secs(const Sim *s, float sec)
 {
@@ -397,8 +406,12 @@ static int exposed(const Sim *s, int i, int x, int y)
     return 0;
 }
 
-/* Nearest exposed cell of the given type within SENSE. Returns 0 if none. */
-static int find_near(Sim *s, int i, int type, int *fx, int *fy)
+/* Ranks a cell for a search: lower is better, -1 to skip it. */
+typedef int (*Rank)(const Sim *s, int x, int y);
+
+/* The best-ranked exposed cell within SENSE, the nearest of equals.
+ * Returns 0 if none. */
+static int find_best(Sim *s, int i, Rank rank, int *fx, int *fy)
 {
     Critter *c = &s->crit[i];
     int best = 1 << 30;
@@ -409,29 +422,185 @@ static int find_near(Sim *s, int i, int type, int *fx, int *fy)
     if (y1 >= s->h) y1 = s->h - 1;
     for (int y = y0; y <= y1; y++)
         for (int x = x0; x <= x1; x++) {
-            if (CELL_TYPE(at(s, x, y)) != type)
+            int r = rank(s, x, y);
+            if (r < 0)
                 continue;
-            int d = dist(c, x, y);
-            if (d >= best || avoided(s, c, x, y) || !exposed(s, i, x, y))
+            int score = r * 1024 + dist(c, x, y);
+            if (score >= best || avoided(s, c, x, y) || !exposed(s, i, x, y))
                 continue;
-            best = d;
+            best = score;
             *fx = x;
             *fy = y;
         }
     return best < (1 << 30);
 }
 
-static int find_food(Sim *s, int i, int *fx, int *fy)
+/* Food: the fullest wheat first, which keeps a field even, then moss. */
+static int rank_food(const Sim *s, int x, int y)
 {
-    return find_near(s, i, MOSS, fx, fy);
+    uint16_t v = at(s, x, y);
+    if (CELL_TYPE(v) == WHEAT && WHEAT_STOCK(v) > 0)
+        return WHEAT_MAX - WHEAT_STOCK(v);
+    return CELL_TYPE(v) == MOSS ? WHEAT_MAX + 1 : -1;
+}
+
+/* Wheat cells within r of (x, y). */
+static int wheat_near(const Sim *s, int x, int y, int r)
+{
+    int n = 0;
+    for (int yy = y - r; yy <= y + r; yy++)
+        for (int xx = x - r; xx <= x + r; xx++)
+            if (xx >= 0 && xx < s->w && yy >= 0 && yy < s->h &&
+                CELL_TYPE(at(s, xx, yy)) == WHEAT)
+                n++;
+    return n;
+}
+
+/* Where to pour: the emptiest wheat, then moss beside the field to make
+ * it bigger. Fuller wheat is only worth it once there's no moss to
+ * take in. */
+static int rank_pour(const Sim *s, int x, int y)
+{
+    uint16_t v = at(s, x, y);
+    if (CELL_TYPE(v) == WHEAT) {
+        int k = WHEAT_STOCK(v);
+        return k >= WHEAT_MAX ? -1 : k < WHEAT_MAX / 2 ? k : 2 * WHEAT_MAX + k;
+    }
+    if (CELL_TYPE(v) == MOSS)
+        return wheat_near(s, x, y, FIELD_SPOT) ? WHEAT_MAX : 2 * WHEAT_MAX;
+    return -1;
+}
+
+/* Water to carry: open water. */
+static int rank_water(const Sim *s, int x, int y)
+{
+    return CELL_TYPE(at(s, x, y)) == WATER ? 0 : -1;
+}
+
+/* Sim time in seconds, which wheat counts its rot by. */
+static uint32_t sim_secs(const Sim *s)
+{
+    return s->frame / (uint32_t)s->steps_per_sec;
+}
+
+/* Write a wheat cell with stock k. A fresh pour restarts its rot clock;
+ * otherwise it keeps the time it had (set_cell would set it to now). */
+static void set_wheat(Sim *s, int x, int y, int k, int poured)
+{
+    int idx = y * s->w + x;
+    uint32_t t = poured || CELL_TYPE(s->cells[idx]) != WHEAT ? sim_secs(s) : s->since[idx];
+    set_cell(s, x, y, CELL(WHEAT, (CELL_COLOR(s->cells[idx]) & ~WHEAT_MAX) | k));
+    s->since[idx] = t;
+}
+
+/* Pour a water cell at (x, y): moss within FIELD_SPOT becomes wheat, then
+ * wheat_per_pour levels go one at a time to the lowest wheat there.
+ * Returns 0, changing nothing, if there's no moss or room in reach. */
+static int pour(Sim *s, int x, int y)
+{
+    int moss = 0, room = 0;
+    for (int yy = y - FIELD_SPOT; yy <= y + FIELD_SPOT; yy++)
+        for (int xx = x - FIELD_SPOT; xx <= x + FIELD_SPOT; xx++) {
+            if (xx < 0 || xx >= s->w || yy < 0 || yy >= s->h)
+                continue;
+            uint16_t v = at(s, xx, yy);
+            moss += CELL_TYPE(v) == MOSS;
+            room += CELL_TYPE(v) == WHEAT && WHEAT_STOCK(v) < WHEAT_MAX;
+        }
+    if (!moss && !room)
+        return 0;
+    for (int yy = y - FIELD_SPOT; yy <= y + FIELD_SPOT; yy++)
+        for (int xx = x - FIELD_SPOT; xx <= x + FIELD_SPOT; xx++)
+            if (xx >= 0 && xx < s->w && yy >= 0 && yy < s->h &&
+                CELL_TYPE(at(s, xx, yy)) == MOSS) {
+                set_wheat(s, xx, yy, 0, 1);
+                s->pour_converted++;
+            }
+    for (int n = 0; n < s->wheat_per_pour; n++) {
+        int bx = -1, by = -1, bk = WHEAT_MAX;
+        for (int yy = y - FIELD_SPOT; yy <= y + FIELD_SPOT; yy++)
+            for (int xx = x - FIELD_SPOT; xx <= x + FIELD_SPOT; xx++) {
+                if (xx < 0 || xx >= s->w || yy < 0 || yy >= s->h)
+                    continue;
+                uint16_t v = at(s, xx, yy);
+                if (CELL_TYPE(v) == WHEAT && WHEAT_STOCK(v) < bk) {
+                    bk = WHEAT_STOCK(v);
+                    bx = xx;
+                    by = yy;
+                }
+            }
+        if (bx < 0)
+            break;          /* full: the rest of the water is wasted */
+        set_wheat(s, bx, by, bk + 1, 1);
+        s->pour_levels++;
+    }
+    s->pours++;
+    return 1;
+}
+
+/* Stock levels in the field around critter c, and how many it wants
+ * there: what it eats in FIELD_RESERVE_HOURS. */
+static int field_short(const Sim *s, const Critter *c)
+{
+    int have = 0;
+    int x0 = c->x - SENSE, x1 = c->x + SENSE, y0 = c->y - SENSE, y1 = c->y + SENSE;
+    for (int y = y0 < 0 ? 0 : y0; y <= y1 && y < s->h; y++)
+        for (int x = x0 < 0 ? 0 : x0; x <= x1 && x < s->w; x++)
+            if (CELL_TYPE(at(s, x, y)) == WHEAT)
+                have += WHEAT_STOCK(at(s, x, y));
+    float per_hour = 60.0f / s->starve_minutes * (c->kind == CR_SMALL ? SMALL_BURN : 1.0f);
+    float want = per_hour * FIELD_RESERVE_HOURS / WHEAT_BITE;
+    return have < want;
+}
+
+/* Farming: fetch a water cell, carry it to the field, pour it. */
+static void farm(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    int fx, fy;
+    if (!c->carry) {
+        if (CELL_TYPE(at(s, c->tx, c->ty)) != WATER) {
+            end_goal(s, c);
+            return;
+        }
+        c->state = CR_FETCH;
+        c->carry = CELL(WATER, CELL_COLOR(at(s, c->tx, c->ty)) & 0x3F);
+        set_cell(s, c->tx, c->ty, CELL(EMPTY, 0));
+        if (find_best(s, i, rank_pour, &fx, &fy)) {
+            set_goal(s, c, G_FARM, fx, fy);
+            c->state = CR_CARRY;
+        } else {
+            drop_carry(s, c);
+            end_goal(s, c);
+        }
+        return;
+    }
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, POUR_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    if (pour(s, c->tx, c->ty)) {
+        c->carry = 0;
+        c->ax = c->tx;
+        end_goal(s, c);
+    } else if (find_best(s, i, rank_pour, &fx, &fy)) {
+        set_goal(s, c, G_FARM, fx, fy);     /* somewhere else, then */
+        c->state = CR_CARRY;
+    } else {
+        drop_carry(s, c);
+        end_goal(s, c);
+    }
 }
 
 /* At the food: take a bite every EAT_SECS until full. */
 static void eat(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
-    int t = CELL_TYPE(at(s, c->tx, c->ty));
-    if (t != MOSS) {
+    uint16_t food = at(s, c->tx, c->ty);
+    int t = CELL_TYPE(food);
+    if (t != MOSS && !(t == WHEAT && WHEAT_STOCK(food) > 0)) {
         end_goal(s, c);
         return;
     }
@@ -442,9 +611,21 @@ static void eat(Sim *s, int i)
     }
     if (s->frame < c->work_until)
         return;
-    uint16_t v = at(s, c->tx, c->ty);
-    set_cell(s, c->tx, c->ty, CELL(WET_DIRT, CELL_COLOR(v)));
-    c->food += MOSS_MEAL;
+    if (t == WHEAT) {
+        /* Eaten bare, it goes back to moss. */
+        int k = WHEAT_STOCK(food) - 1;
+        if (k > 0)
+            set_wheat(s, c->tx, c->ty, k, 0);
+        else
+            set_cell(s, c->tx, c->ty, CELL(MOSS, CELL_COLOR(food) & ~WHEAT_MAX));
+        s->bites++;
+        c->food += WHEAT_BITE;
+        c->ax = c->tx;
+    } else {
+        set_cell(s, c->tx, c->ty, CELL(WET_DIRT, CELL_COLOR(food)));
+        c->food += MOSS_MEAL;
+        c->ax = c->tx;
+    }
     if (c->food > 1.0f)
         c->food = 1.0f;
     end_goal(s, c);
@@ -462,14 +643,36 @@ static void think(Sim *s, int i)
 
     int hungry = c->food < EAT_BELOW || (c->eating && c->food < FULL_ABOVE);
     c->eating = (uint8_t)hungry;
-    if (hungry && find_food(s, i, &fx, &fy)) {
+    if (hungry && find_best(s, i, rank_food, &fx, &fy)) {
         set_goal(s, c, G_EAT, fx, fy);
+        return;
+    }
+
+    /* Still holding water from before: pour it, or put it down. */
+    int px, py;
+    if (c->carry && CELL_TYPE(c->carry) == WATER) {
+        if (find_best(s, i, rank_pour, &px, &py)) {
+            set_goal(s, c, G_FARM, px, py);
+            c->state = CR_CARRY;
+            return;
+        }
+        drop_carry(s, c);
+    }
+
+    /* Keep the field stocked, if there's water to fetch and somewhere
+     * to pour it. */
+    if (field_short(s, c) && find_best(s, i, rank_pour, &px, &py) &&
+        find_best(s, i, rank_water, &fx, &fy)) {
+        set_goal(s, c, G_FARM, fx, fy);
+        c->state = CR_FETCH;
         return;
     }
 
     if (c->goal != G_NONE || s->frame < c->work_until)
         return;
-    int tx = c->x + (int)(rnd(s) % (2 * WANDER + 1)) - WANDER;
+    /* Stroll about near where it lives, so it doesn't drift away from
+     * its food. */
+    int tx = c->ax + (int)(rnd(s) % (2 * WANDER + 1)) - WANDER;
     if (tx < 0) tx = 0;
     if (tx > s->w - c->w) tx = s->w - c->w;
     set_goal(s, c, G_WANDER, tx, c->y);
@@ -567,6 +770,8 @@ static void critter_tick(Sim *s, int i)
         c->next_move = s->frame + FALL_STEPS;
         return;
     }
+    if (c->state == CR_FALLING && !c->ax)
+        c->ax = c->x;               /* first landing */
     if (c->state == CR_FALLING || c->state == CR_DIG)
         c->state = CR_IDLE;
 
@@ -605,6 +810,10 @@ static void critter_tick(Sim *s, int i)
     case G_EAT:
         if (approach(s, i))
             eat(s, i);
+        break;
+    case G_FARM:
+        if (approach(s, i))
+            farm(s, i);
         break;
     }
 }
