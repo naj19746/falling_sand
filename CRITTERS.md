@@ -820,3 +820,39 @@ Then watch it with `make run`, using `c` to add critters, `s` for seeds,
 `l` for lightning (it makes the iron they build with and supercharges
 critters near it), and
 `--set rain_override=…` for rain.
+
+## Results (as built)
+
+Steps 1-15 are built on the `critters` branch; step 16 (keyboard) isn't.
+HUMAN_REVIEW.md lists where the build differs from this plan and why. The
+main differences: the hut is a roof over a floor, open at both ends;
+critters climb; they catch falling raindrops and plant seeds; and
+streams don't pour right on top of them.
+
+**Final values:** `wheat_per_pour` 3, `critter_starve_minutes` 40,
+`WELL_MAX_ROWS` 5, `TOSS_SHARE` 0.75 (of grains actually poured),
+`CATCH_RANGE` 8, `PLANT_RADIUS` 5, `PLANT_SECS` 20 min, `HOME_W` 15.
+
+**Measured:** a farm alone holds the fill 24.0 min. Twelve charged large
+tossers hold it 84 min, and it always ends by overfill, not the stall
+check.
+
+**Balance targets: not met.** In the typical day, critters almost never
+eat. Raindrops sink into sand at once, moss rarely forms in clear weather,
+and the 9-minute fill buries whatever does. Every critter starves at its
+starve time, whatever the knobs. The numbers and options are in
+HUMAN_REVIEW.md.
+
+| Scenario | Runs alive at end | Max alive | Mean life (h) | Lived past arrival day | Deaths: starved/buried | Drains/day | Water time | Ate (food time) |
+|---|---|---|---|---|---|---|---|---|
+| typical | 0/8 | 2 | 0.9 | 0/48 | 48/0 | 50 | 0% | 0% |
+| nocommit | 0/8 | 2 | 0.9 | 0/48 | 48/0 | 50 | 0% | 0% |
+| noshower | 0/8 | 2 | 0.9 | 0/48 | 48/0 | 50 | 0% | 0% |
+| showers | 0/8 | 2 | 0.9 | 0/48 | 48/0 | 49 | 0% | 0% |
+| starve240 | 6/8 | 4 | 5.5 | 20/36 | 36/0 | 49 | 0% | 0% |
+| wpp4showers | 0/8 | 2 | 0.9 | 0/48 | 48/0 | 49 | 0% | 0% |
+
+`starve240` is the typical day with `critter_starve_minutes = 240`. Its
+"alive at end" comes only from critters lasting 5.5 h without eating. In
+every row the time spent eating or on water rounds to 0%. Drains stay at
+about 50 a day because no farm ever forms to hold the fill.
