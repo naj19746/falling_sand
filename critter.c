@@ -81,6 +81,7 @@
 #define WELL_ROWS     2
 #define WELL_MAX_ROWS 5
 #define PATCH_WELL_W  3
+#define HOME_LEVEL    8
 #define HUT_W         5
 #define HUT_GAP       3
 #define HOME_W(ww)    (HUT_W + HUT_GAP + (ww))
@@ -1057,6 +1058,13 @@ static int field_junk(const Sim *s, const Home *h, int *jx, int *jy)
     return 0;
 }
 
+/* Near enough its home's floor to build on it. Riding the fill high above
+ * it, or fallen far below, the plan is buried or out of reach. */
+static int at_home_level(const Critter *c, const Home *h)
+{
+    return abs(c->y - h->y) <= HOME_LEVEL;
+}
+
 /* In any home's plan. */
 static int in_plan(const Sim *s, int x, int y)
 {
@@ -1760,7 +1768,16 @@ static void press(Sim *s, int i)
     if (s->frame < c->work_until)
         return;
     if (CELL_TYPE(at(s, c->tx, c->ty)) == SAND && in_reach(c, c->tx, c->ty)) {
-        set_cell(s, c->tx, c->ty, CELL(DIRT, rnd(s) & 0xFF));
+        /* Its home still needs bricks: this one goes straight into its
+         * hands, before sand buries it. Else it's left as dirt. */
+        Home *h = c->home >= 0 && s->home[c->home].used ? &s->home[c->home] : NULL;
+        int bx, by;
+        if (h && !c->carry && next_build(s, h, &bx, &by)) {
+            set_cell(s, c->tx, c->ty, CELL(EMPTY, 0));
+            c->carry = CELL(STONE, rnd(s) & 0x3F);
+        } else {
+            set_cell(s, c->tx, c->ty, CELL(DIRT, rnd(s) & 0xFF));
+        }
         s->pressed++;
     }
     end_goal(s, c);
@@ -2121,7 +2138,7 @@ static int use_carry(Sim *s, int i)
             return 1;
         }
     } else if (t == STONE || t == IRON) {
-        if (h && next_build(s, h, &x, &y) && !avoided(s, c, x, y)) {
+        if (h && at_home_level(c, h) && next_build(s, h, &x, &y) && !avoided(s, c, x, y)) {
             set_goal(s, c, G_BUILD, x, y);
             c->state = CR_CARRY;
             return 1;
@@ -2269,7 +2286,7 @@ static void think(Sim *s, int i)
      * critter and there's any to be had, or stone. With everything built,
      * large critters go on fetching iron to swap for the stone in it,
      * which also mends rust. */
-    int need = h && next_build(s, h, &px, &py);
+    int need = h && at_home_level(c, h) && next_build(s, h, &px, &py);
     int swap = h && !need && stone_to_swap(s, c, h, &px, &py);
     if ((need || swap) && find_iron(s, i, &fx, &fy)) {
         set_goal(s, c, G_BUILD, fx, fy);

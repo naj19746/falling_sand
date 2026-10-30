@@ -611,6 +611,51 @@ is about the same.
 
 No well held water by any evening. One starve240 run guttered 11 drops.
 
+### Follow-up: why pressed dirt doesn't become walls; more critters
+
+**Trace (4 realistic days):**
+- Each critter presses 180-380 grains a day, but about 90% of the dirt
+  around a patch is under sand, so it isn't usable (brick material has
+  to be open to the sky). Material is in sight only 16-27% of the time.
+- Critters start 107-288 build trips a day, and about 1 in 10 lays a
+  cell. In the failed ones the home is under 50-60 rows of the fill.
+  Its plan cells are still empty pockets in the pile, so they look
+  buildable, while the critter rides the surface far above. Or the
+  material is 50-90 rows below, or the critter has fallen 115 rows below
+  its home.
+- Time with a patch home: 32-45% getting back to the patch, 7-13%
+  clearing it, 8-17% pressing, 1-2% building.
+
+**Changes:**
+- A pressed grain goes straight into the critter's hands as a brick if
+  its home still needs one, instead of being left to be buried.
+- A critter only starts building when it's within 8 rows of its home's
+  floor (`HOME_LEVEL`). Otherwise the plan is buried, or out of reach.
+
+So building only happens in the few minutes after a drain, before the
+pile covers the patch again. The walls on iron are kept across drains,
+so a home grows a few cells per cycle at best.
+
+**More critters (typical day, 8 seeds x 3 days):** `BATCH` is how many
+arrive together each day (2 now); `KEEP` replaces critters so that many
+are always alive.
+
+| Setup | Arrivals | Runs alive at end | Mean life | Bites per arrival | Fill held | Home cells laid | Homes finished |
+|---|---|---|---|---|---|---|---|
+| 2 a day (now) | 6 | 2/8 | 1.7 h | 0.8 | 2.0 h | 3.5 | 0 |
+| 3 a day | 9 | 2/8 | 1.9 h | 1.1 | 2.4 h | 4.2 | 0 |
+| 2 kept alive | 29 | 8/8 | 1.8 h | 1.2 | 10.4 h | 10.4 | 0 |
+| 3 kept alive | 38 | 8/8 | 2.0 h | 1.8 | 14.8 h | 14.2 | 1 run |
+
+More critters hold the fill much longer (more farms and tossers), and
+each eats a little more, but each still lives about 2 hours. Every
+critter plants its own patch and plans its own home there, so their
+building is split over separate homes. Letting newcomers join an
+existing patch and home, instead of planting their own, is probably the
+next lever.
+
+All step tests pass.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
