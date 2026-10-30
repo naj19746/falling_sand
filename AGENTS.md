@@ -61,6 +61,23 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
 - The scan is bottom-up and alternates direction each step. Per-cell stamps
   stop a cell moving twice in one step.
 
+## Invariants in critter.c
+
+- A live critter's body is exactly its `w`x`h` rectangle of `CRITTER`
+  cells, whose color byte holds its slot, and no other cell is
+  `CRITTER`. Nothing else may write over a critter cell: `sim_paint()`,
+  `clear_unkept()` and the strike skip them, and every critter move goes
+  through `relocate()`. A critter that's away (`CR_AWAY`, off screen
+  during a drain) has no cells.
+- A carried cell is out of the grid (the totals already dropped) until
+  it's put down with `set_cell()`.
+- Wheat's `since[]` is in sim seconds (`frame / steps_per_sec`), not the
+  wall clock: it rots on sim time. `set_cell()` handles that.
+- Only a pour in critter.c makes or grows wheat; nothing in sim.c's water
+  code knows about it.
+- Every critter timing goes through `csecs()` (supercharge) except
+  falling.
+
 ## Adding a config setting
 
 Change all of these together:
@@ -80,6 +97,9 @@ steps, and checks that:
 - the grid settles: no falling grain is left with room to fall, and every
   chunk eventually sleeps
 - several fill/drain cycles in a row complete
+- with critters: every `CRITTER` cell belongs to a live critter's
+  rectangle and every rectangle is whole, and `s->wheat` never rises by
+  more than the pours converted that step (CRITTERS.md, Testing)
 
 Then look at it with `make run`. For the external inputs, use
 `--set rain_override=<drops/min>` for rain, the `s` and `l` keys for seeds

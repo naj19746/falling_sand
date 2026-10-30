@@ -151,6 +151,7 @@ typedef struct {
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
     uint8_t climbing;       /* clinging to the wall it faces */
+    uint8_t thirsty;        /* has a use for water: catches rain */
     int home;               /* index into s->home[], or -1 */
     int ax;                 /* where it strolls around: home, or its food */
     uint32_t buried_steps;  /* steps spent buried */
@@ -159,6 +160,8 @@ typedef struct {
     uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
     uint32_t dig_at;        /* sim frame it can next dig up */
     uint32_t iron_next;     /* sim frame it can next look for iron */
+    uint32_t plant_at;      /* sim frame it can next plant a seed */
+    uint32_t far_next;      /* sim frame it can next look further afield */
 } Critter;
 
 /* A toss of sand off the screen, for the renderer to draw as an arc. */
@@ -270,6 +273,9 @@ typedef struct {
     /* Farming counts, for checking that only pours make wheat. */
     long pours, pour_converted, pour_levels, bites, rotted;
     long stocked, laid;     /* water into wells, cells built */
+    long soaks;             /* water poured on dirt */
+    long planted;           /* seeds critters planted */
+    long caught;            /* drops critters caught */
     int critters;           /* slots in use */
 } Sim;
 

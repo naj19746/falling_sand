@@ -122,6 +122,37 @@ sandbg --profile         # print frame timings every 5 seconds
 sandbg --help            # all flags
 ```
 
+## Critters
+
+Finished kana sets and new Pixelorama drawings drop tiny critters in from
+the top (`c` drops one by hand). Small ones are 1x2 cells and cheap to
+feed; large ones are 2x3 and do the heavy work: they mine iron, and toss
+more sand. They live off the land:
+
+- **Food:** they eat moss and wheat. A full stomach lasts about 40 minutes
+  of visible time (small ones last longer); empty, they crumple into grey
+  bodies that rot into dirt.
+- **Farming:** water poured on moss turns it into wheat and stocks it with
+  food. Only critters do this; rain never makes wheat. With no earth
+  around, a critter plants a seed it carries, and pours water on dirt to
+  grow moss the way rain does.
+- **Water:** sand swallows raindrops at once, so critters run under falling
+  drops to catch them, carry puddle water, and keep it in a covered well,
+  where it never dries up.
+- **Building:** they mine stone and iron and build a hut (a roof over a
+  floor) and a well on level ground near food. Iron comes only from
+  lightning, so from git commits. An all-iron hut keeps its critters, and
+  the field and well water joined to it, through the drain; everyone else
+  walks off the screen and comes back at the next fill.
+- **Holding the fill:** a home with wheat holds the fill like a living
+  tree, and critters near a side edge toss sand off the screen to make
+  the hold last longer, up to about four times as long.
+- **Lightning:** a strike near a critter supercharges it for ten minutes:
+  three times as fast at everything.
+
+Sand streams part around critters, so a stream can't pour straight onto
+one, but a pile can still bury them.
+
 ## Keyboard LEDs
 
 On a Keychron Q4 (ANSI), sandbg can drive the 61 per-key LEDs. Each key

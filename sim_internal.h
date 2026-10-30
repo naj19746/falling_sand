@@ -180,6 +180,9 @@ void critters_drain(Sim *s);
  * survive are forgotten, and critters who left come back. */
 void critters_refill(Sim *s);
 
+/* sim.c: a drop soaked into the dirt at (cx, cy), dry or already wet. */
+void soak(Sim *s, int cx, int cy, int dry);
+
 /* critter.c: a bolt just struck (s->bolt); critters near it get charged. */
 void charge_critters(Sim *s);
 

@@ -53,7 +53,8 @@
  * suffocates. Digging up through sand moves it one row each DIG_SECS. */
 #define BURY_DEPTH  10
 #define BURY_SECS   60.0f
-#define DIG_SECS    1.0f
+#define DIG_SECS    0.5f
+#define COVERED     2
 
 /* Farming: a pour of water adds wheat_per_pour stock levels to the field
  * within FIELD_SPOT cells of where it lands, turning moss there into
@@ -91,12 +92,24 @@
 /* Farms are counted about once a second. */
 #define FARM_COUNT_SECS 1.0f
 
+/* Catching rain: drops sink into sand within a moment of landing, so a
+ * critter that wants water runs under a drop falling within CATCH_RANGE
+ * columns of it, and grabs any drop that comes within reach. */
+#define CATCH_RANGE 8
+
+/* Planting: a critter with no earth within SENSE plants a seed it
+ * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
+ * most once every PLANT_SECS. Dirt isn't food: it still takes water to
+ * grow moss on it. */
+#define PLANT_RADIUS 5
+#define PLANT_SECS   (20 * 60.0f)
+
 /* Looking for iron anywhere on screen costs a full scan, so a critter
  * that found none waits this long before looking again. */
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -575,7 +588,8 @@ static int wheat_near(const Sim *s, int x, int y, int r)
 
 /* Where to pour: the emptiest wheat, then moss beside the field to make
  * it bigger. Fuller wheat is only worth it once there's no moss to
- * take in. */
+ * take in. With no moss at all, water on dirt starts some, the way rain
+ * does: wet dirt first, since it turns straight to moss. */
 static int rank_pour(const Sim *s, int x, int y)
 {
     uint16_t v = at(s, x, y);
@@ -587,7 +601,35 @@ static int rank_pour(const Sim *s, int x, int y)
     }
     if (CELL_TYPE(v) == MOSS)
         return wheat_near(s, x, y, FIELD_SPOT) ? WHEAT_MAX : 2 * WHEAT_MAX;
+    if (CELL_TYPE(v) == WET_DIRT)
+        return 3 * WHEAT_MAX + 1;
+    if (CELL_TYPE(v) == DIRT)
+        return 3 * WHEAT_MAX + 2;
     return -1;
+}
+
+/* Any earth: moss and wheat to eat or farm, dirt to grow moss on. */
+static int rank_earth(const Sim *s, int x, int y)
+{
+    return EARTH(CELL_TYPE(at(s, x, y))) && open_above(s, x, y) ? 0 : -1;
+}
+
+/* Turn the sand around critter c's feet into dirt. Returns 0 if there
+ * was no sand there to plant in. */
+static int plant(Sim *s, Critter *c)
+{
+    int n = 0, cx = c->x + c->w / 2, cy = c->y + 1, r = PLANT_RADIUS;
+    for (int y = cy - r; y <= cy + r; y++)
+        for (int x = cx - r; x <= cx + r; x++) {
+            int dx = x - cx, dy = y - cy;
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h || dx * dx + dy * dy > r * r ||
+                CELL_TYPE(at(s, x, y)) != SAND)
+                continue;
+            set_cell(s, x, y, CELL(DIRT, rnd(s) & 0xFF));
+            n++;
+        }
+    s->planted += n > 0;
+    return n > 0;
 }
 
 /* Water to carry: open water that isn't already in a well. */
@@ -866,6 +908,33 @@ static int rank_stone(const Sim *s, int x, int y)
     return -1;
 }
 
+/* Nothing in sight: the best-ranked cell open above anywhere on screen,
+ * nearest of equals. A full scan, so it waits IRON_LOOK_SECS after
+ * finding nothing. */
+static int find_far(Sim *s, int i, Rank rank, int *fx, int *fy)
+{
+    Critter *c = &s->crit[i];
+    if (s->frame < c->far_next)
+        return 0;
+    int best = 1 << 30;
+    for (int y = 0; y < s->h; y++)
+        for (int x = 0; x < s->w; x++) {
+            int r = rank(s, x, y);
+            if (r < 0)
+                continue;
+            int score = r * 1024 + dist(c, x, y);
+            if (score >= best || avoided(s, c, x, y) || !open_above(s, x, y))
+                continue;
+            best = score;
+            *fx = x;
+            *fy = y;
+        }
+    if (best < (1 << 30))
+        return 1;
+    c->far_next = s->frame + csecs(s, c, IRON_LOOK_SECS);
+    return 0;
+}
+
 /* Unbuilt iron anywhere on the screen, the nearest first: iron is rare,
  * and worth a long trip. Large critters only. */
 static int find_iron(Sim *s, int i, int *fx, int *fy)
@@ -1100,7 +1169,12 @@ static void set_wheat(Sim *s, int x, int y, int k, int poured)
  * Returns 0, changing nothing, if there's no moss or room in reach. */
 static int pour(Sim *s, int x, int y)
 {
-    int moss = 0, room = 0;
+    int moss = 0, room = 0, t = CELL_TYPE(at(s, x, y));
+    if (t == DIRT || t == WET_DIRT) {
+        soak(s, x, y, t == DIRT);
+        s->soaks++;
+        return 1;
+    }
     for (int yy = y - FIELD_SPOT; yy <= y + FIELD_SPOT; yy++)
         for (int xx = x - FIELD_SPOT; xx <= x + FIELD_SPOT; xx++) {
             if (xx < 0 || xx >= s->w || yy < 0 || yy >= s->h)
@@ -1467,6 +1541,8 @@ static void eat(Sim *s, int i)
     end_goal(s, c);
 }
 
+static int falling_drop(const Sim *s, const Critter *c, int *dx);
+
 /* Something to do with what it's holding: water goes on the field or in
  * the well, stone and iron into the plan, and anything else is dumped
  * away from home. Returns 0 if it put it down instead. */
@@ -1490,6 +1566,13 @@ static int use_carry(Sim *s, int i)
         }
         if (find_best(s, i, rank_pour, &x, &y)) {
             set_goal(s, c, G_FARM, x, y);
+            c->state = CR_CARRY;
+            return 1;
+        }
+        /* Water and nowhere to put it: plant a seed to pour it on. */
+        if (s->frame >= c->plant_at && plant(s, c)) {
+            c->plant_at = s->frame + csecs(s, c, PLANT_SECS);
+            set_goal(s, c, G_FARM, c->x, c->y + 1);
             c->state = CR_CARRY;
             return 1;
         }
@@ -1547,7 +1630,7 @@ static void think(Sim *s, int i)
     /* Eating comes first, even with its hands full. */
     int hungry = c->food < EAT_BELOW || (c->eating && c->food < FULL_ABOVE);
     c->eating = (uint8_t)hungry;
-    if (hungry && find_best(s, i, rank_food, &fx, &fy)) {
+    if (hungry && (find_best(s, i, rank_food, &fx, &fy) || find_far(s, i, rank_food, &fx, &fy))) {
         set_goal(s, c, G_EAT, fx, fy);
         return;
     }
@@ -1568,9 +1651,17 @@ static void think(Sim *s, int i)
         return;
     }
 
+    /* Nothing growing and nothing to grow it on: plant a seed. */
+    if (s->frame >= c->plant_at && !find_best(s, i, rank_earth, &fx, &fy) && plant(s, c)) {
+        c->plant_at = s->frame + csecs(s, c, PLANT_SECS);
+        return;
+    }
+
     /* Keep the field stocked: puddles first, then the well. */
     int px, py, puddle = find_best(s, i, rank_water, &fx, &fy);
     int well_done = h && part_done(s, h, 1);
+    c->thirsty = (uint8_t)((field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) ||
+                           (well_done && (well_water(s, h, &room), room > 0)));
     if (field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) {
         if (!puddle && well_done && well_water(s, h, &room) > 0) {
             mouth(h, &fx, &fy);
@@ -1610,6 +1701,13 @@ static void think(Sim *s, int i)
     int edge = c->x < TOSS_RANGE ? -1 : c->x + c->w > s->w - TOSS_RANGE ? 1 : 0;
     if (s->held && edge && toss_room(s) && find_best(s, i, rank_sand, &fx, &fy)) {
         set_goal(s, c, G_TOSS, fx, fy);
+        return;
+    }
+
+    /* Rain falling nearby: run under it. */
+    int dx;
+    if (c->thirsty && !c->carry && falling_drop(s, c, &dx)) {
+        set_goal(s, c, G_CATCH, dx, c->y);
         return;
     }
 
@@ -1691,6 +1789,52 @@ static void start_dying(Sim *s, Critter *c)
 
 static void leave(Sim *s, int i);
 
+/* Grab a drop of water in reach, falling or just landed, outside any
+ * well. Checked every step: a falling drop is only in reach for a
+ * moment. */
+static void catch_drop(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    for (int y = c->y - c->h; y <= c->y + 1; y++)
+        for (int x = c->x - 1; x <= c->x + c->w; x++) {
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h)
+                continue;
+            uint16_t v = at(s, x, y);
+            if (CELL_TYPE(v) != WATER || in_well(s, x, y))
+                continue;
+            c->carry = CELL(WATER, CELL_COLOR(v) & 0x3F);
+            set_cell(s, x, y, CELL(EMPTY, 0));
+            s->caught++;
+            if (c->goal == G_CATCH || c->goal == G_WANDER)
+                end_goal(s, c);
+            return;
+        }
+}
+
+/* A raindrop falling within CATCH_RANGE columns, above it. */
+static int falling_drop(const Sim *s, const Critter *c, int *dx)
+{
+    int best = CATCH_RANGE + 1;
+    for (int x = c->x - CATCH_RANGE; x < c->x + c->w + CATCH_RANGE; x++) {
+        if (x < 0 || x >= s->w)
+            continue;
+        for (int y = 0; y < c->y - c->h; y++) {
+            uint16_t v = at(s, x, y);
+            if (CELL_TYPE(v) == WATER && (CELL_COLOR(v) & RAIN_FRESH)) {
+                int d = abs(x - c->x);
+                if (d < best) {
+                    best = d;
+                    *dx = x;
+                }
+                break;
+            }
+            if (CELL_TYPE(v) != EMPTY)
+                break;
+        }
+    }
+    return best <= CATCH_RANGE;
+}
+
 static void critter_tick(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
@@ -1703,6 +1847,8 @@ static void critter_tick(Sim *s, int i)
             start_dying(s, c);
         }
     }
+    if (c->thirsty && !c->carry && c->goal != G_DIE)
+        catch_drop(s, i);
     if (s->frame < c->next_move)
         return;
     if (c->goal == G_DIE) {
@@ -1730,10 +1876,11 @@ static void critter_tick(Sim *s, int i)
     if (c->state == CR_FALLING || c->state == CR_DIG)
         c->state = CR_IDLE;
 
-    /* Sand on its head: dig up through it before anything else. Buried
-     * deep, or stuck under it, it's running out of air. */
+    /* Covered in sand: wriggle up through it. Buried deep, or stuck
+     * under it, it's running out of air. A grain or two on its head it
+     * shrugs off as it goes about its business. */
     int any, load = buried_under(s, c, &any);
-    if (any) {
+    if (load >= COVERED) {
         int dug = s->frame >= c->dig_at && dig_up(s, i);
         if (dug)
             c->dig_at = s->frame + csecs(s, c, DIG_SECS);
@@ -1743,16 +1890,20 @@ static void critter_tick(Sim *s, int i)
             start_dying(s, c);
             return;
         }
-        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
-        return;
+        if (load > BURY_DEPTH || !dug) {
+            c->next_move = s->frame + csecs(s, c, MOVE_SECS);
+            return;
+        }
+    } else {
+        c->buried_steps = 0;
     }
-    c->buried_steps = 0;
 
     if (s->frame >= c->next_think)
         think(s, i);
     c->next_move = s->frame + csecs(s, c, MOVE_SECS);
 
     switch (c->goal) {
+    case G_CATCH:
     case G_WANDER:
     case G_DETOUR:
         if (c->x == c->tx || !step_side(s, i, c->tx < c->x ? -1 : 1)) {
@@ -1936,12 +2087,15 @@ void critters_refill(Sim *s)
             if (s->crit[i].home == k)
                 s->crit[i].home = -1;
     }
-    /* Back in from the side each left by, dropping from the top. */
+    /* Back in on the side each left by, dropping from the top somewhere
+     * in that half of the screen. */
     for (int i = 0; i < MAX_CRITTERS; i++) {
         Critter *c = &s->crit[i];
         if (c->state == CR_AWAY) {
             c->y = c->h - 1;
-            c->x = c->face > 0 ? 0 : s->w - c->w;
+            c->x = (int)(rnd(s) % (uint32_t)(s->w / 2 - c->w));
+            if (c->face < 0)
+                c->x = s->w - c->w - c->x;
             for (int k = 0; k < SENSE && !fits(s, i, c->x, c->y); k++)
                 c->x += c->face;
             if (!fits(s, i, c->x, c->y))
@@ -1977,12 +2131,12 @@ void reset_critters(Sim *s)
     s->critters = 0;
 }
 
-/* Something worth landing near in column x: moss or wheat anywhere down
- * it. */
+/* Something worth landing near in column x: moss, wheat, or the dirt
+ * it grows on, anywhere down it. */
 static int good_column(const Sim *s, int x)
 {
     for (int y = 0; y < s->h; y++)
-        if (MOSSY(CELL_TYPE(at(s, x, y))))
+        if (EARTH(CELL_TYPE(at(s, x, y))))
             return 1;
     return 0;
 }

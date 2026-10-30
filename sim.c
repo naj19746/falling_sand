@@ -51,6 +51,9 @@
 #define STRIKE_TRIES 64
 #define BOLT_MIN_SEG 2
 
+/* Emitters don't pour within this many columns of a critter. */
+#define CRITTER_SHELTER 1
+
 /* While a tree holds off the drain, emitters pour at 1/HOLD_POUR_DIV of
  * their usual rate, and every OVERFILL_STEPS the screen is checked against
  * drain_overfill. */
@@ -459,6 +462,19 @@ static void wander(Sim *s, float *x, float *v, float jitter, float vmax,
     if (*x > s->w - 3)   { *x = s->w - 3;   *v = -*v; }
 }
 
+/* A stream parts around critters: no grain is poured right over one, or
+ * the emitters would bury them faster than they could ever dig. */
+static int under_critter(const Sim *s, int x)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        const Critter *c = &s->crit[i];
+        if (c->state != CR_FREE && c->state != CR_AWAY &&
+            x >= c->x - CRITTER_SHELTER && x < c->x + c->w + CRITTER_SHELTER)
+            return 1;
+    }
+    return 0;
+}
+
 /* Pours 1 in div of the grains it otherwise would. */
 /* Adds how many grains it tried to pour (not counting ones skipped by the
  * trickle) to *tried. */
@@ -483,6 +499,8 @@ static void emit(Sim *s, Emitter *e, int div, int *tried)
         if (x < 0 || x >= s->w)
             continue;
         (*tried)++;
+        if (s->critters && under_critter(s, x))
+            continue;
         if (CELL_TYPE(s->cells[x]) == EMPTY) {
             set_cell(s, x, 0, CELL(SAND, grain_color(s)));
             s->stall_poured++;
@@ -660,8 +678,9 @@ static inline void stay_awake(Sim *s, int x, int y)
 }
 
 /* A drop soaked into the dirt at (cx, cy): wet the dirt around it, or if it
- * was already wet there, grow moss on the wet dirt around it. */
-static void soak(Sim *s, int cx, int cy, int dry)
+ * was already wet there, grow moss on the wet dirt around it. Critters
+ * pour water on dirt the same way (critter.c). */
+void soak(Sim *s, int cx, int cy, int dry)
 {
     int r = dry ? WET_SPOT : MOSS_SPOT;
     for (int y = cy - r; y <= cy + r; y++) {
