@@ -422,6 +422,15 @@ int main(int argc, char **argv)
                 case SDLK_s:     sim_drop_seed(&sim); break;
                 case SDLK_l:     sim_strike(&sim); break;
                 case SDLK_SPACE: paused = !paused; break;
+                /* Temporary, for checking colors: paint wheat or bodies
+                 * under the pointer. */
+                case SDLK_1: case SDLK_2: {
+                    int mx, my;
+                    SDL_GetMouseState(&mx, &my);
+                    sim_paint(&sim, mx / scale, my / scale, BRUSH_RADIUS,
+                              ev.key.keysym.sym == SDLK_1 ? WHEAT : BODY);
+                    break;
+                }
                 }
             }
         }

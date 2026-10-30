@@ -13,9 +13,13 @@
  * GLASS is sand fused by lightning: rigid like stone until too much weight
  * piles on it, then it breaks into SHARD, which falls like sand.
  * WOOD, LEAF and ROOT make up a tree, grown from moss struck by lightning.
+ * CRITTER is a critter's body (critter.c): static, and sand rests on it.
+ * WHEAT is moss a critter has watered; it behaves like moss and holds food.
+ * BODY is what a dead critter leaves: falls like sand, rots into DIRT.
  * Everything from SAND on falls. */
-enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
-       SAND, DEBRIS, SEED, DIRT, WET_DIRT, MOSS, SHARD };
+enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT, CRITTER,
+       SAND, DEBRIS, SEED, DIRT, WET_DIRT, MOSS, WHEAT, SHARD, BODY };
+#define CELL_TYPES 18
 
 /* Each cell: low byte = type, high byte = palette color index. */
 #define CELL(type, color) ((uint16_t)((type) | ((color) << 8)))
@@ -23,10 +27,27 @@ enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
 #define CELL_COLOR(c)     ((c) >> 8)
 #define FALLS(t)          ((t) >= SAND)
 #define SOLID(t)          ((t) == STONE || (t) == GLASS || TREE(t))  /* stone, glass and trees: crumble during drain */
-#define DAMP(t)           ((t) == WET_DIRT || (t) == MOSS)
+#define DAMP(t)           ((t) == WET_DIRT || MOSSY(t))
+#define MOSSY(t)          ((t) == MOSS || (t) == WHEAT)  /* clings like moss */
 #define EARTH(t)          ((t) == DIRT || DAMP(t))    /* the blaster spares these */
 #define HELD_BY_IRON(t)   (EARTH(t) || TREE(t))       /* earth or tree joined to iron */
 #define TREE(t)           ((t) == WOOD || (t) == LEAF || (t) == ROOT)
+
+/* Color bit on stone or iron a critter placed, so critters don't mine
+ * buildings. Everything else that makes stone or iron clears it. */
+#define BUILT             0x80
+
+/* A wheat cell's color byte: the low bits are how much eating is left in
+ * it, 0 to WHEAT_MAX. */
+#define WHEAT_MAX         7
+#define WHEAT_STOCK(c)    (CELL_COLOR(c) & 7)
+
+/* A critter cell's color byte: the slot in the low 5 bits, the body part
+ * in the top 3. */
+#define CRITTER_CELL(slot, part)  CELL(CRITTER, (slot) | ((part) << 5))
+#define CRITTER_SLOT(c)   (CELL_COLOR(c) & 31)
+#define CRITTER_PART(c)   (CELL_COLOR(c) >> 5)
+enum { PART_HEAD, PART_EYE, PART_BODY, PART_LEG, PART_LEG_ALT, PART_SPARK };
 
 /* Color bit on a leaf that has turned brown on a thirsty tree. */
 #define WITHERED          0x80
@@ -160,6 +181,8 @@ typedef struct {
     int glass_strength;     /* cells of load glass holds before breaking */
     int glass;              /* glass cells, running total */
     int iron;               /* iron cells, running total */
+    int wheat;              /* wheat cells, running total */
+    int bodies;             /* body cells, running total */
     uint8_t *keep;          /* per cell: kept through the drain */
     int *stack;             /* flood-fill scratch, w*h ints */
     int kept_grains;        /* kept dirt/moss, counted in grains too */

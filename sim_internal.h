@@ -75,6 +75,8 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
     s->solids += SOLID(new) - SOLID(old);
     s->glass  += (new == GLASS) - (old == GLASS);
     s->iron   += (new == IRON) - (old == IRON);
+    s->wheat  += (new == WHEAT) - (old == WHEAT);
+    s->bodies += (new == BODY) - (old == BODY);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
     if (DAMP(new))

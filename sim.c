@@ -208,7 +208,7 @@ static void place_ledges(Sim *s)
                 if (yy >= 0 && yy < s->h) {
                     int idx = yy * s->w + (x0 + dx);
                     if (CELL_TYPE(s->cells[idx]) == EMPTY && !(s->keep && s->keep[idx]))
-                        set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0xFF));
+                        set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0x7F));
                 }
             }
         }
@@ -278,6 +278,7 @@ void sim_reset(Sim *s)
     memset(s->cells, 0, (size_t)s->w * s->h * sizeof *s->cells);
     if (s->keep) memset(s->keep, 0, (size_t)s->w * s->h);
     s->grains = s->solids = s->water = s->damp = s->glass = s->iron = 0;
+    s->wheat = s->bodies = 0;
     s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;
@@ -533,7 +534,7 @@ static void crumble(Sim *s)
             else if (TREE(t))
                 set_cell(s, x, y, CELL(DIRT, CELL_COLOR(row[x])));
             else
-                set_cell(s, x, y, CELL(t == GLASS ? SHARD : DEBRIS, CELL_COLOR(row[x])));
+                set_cell(s, x, y, CELL(t == GLASS ? SHARD : DEBRIS, CELL_COLOR(row[x]) & ~BUILT));
         }
     }
 }
@@ -672,7 +673,7 @@ static void through_moss(Sim *s, int x, int y)
     int yy = y + 1;
     for (; yy < s->h; yy++) {
         int t = CELL_TYPE(s->cells[yy * s->w + x]);
-        if (t != MOSS && t != LEAF && t != WOOD)
+        if (!MOSSY(t) && t != LEAF && t != WOOD)
             break;
     }
     if (yy >= s->h)
@@ -773,10 +774,10 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
      * awake until it has soaked in; water that fails the roll this step
      * still spreads as usual if it's on the surface. */
     int seeping = CELL_COLOR(row[x]) & SEEPING;
-    if (below == SAND || below == MOSS) {
+    if (below == SAND || MOSSY(below)) {
         uint32_t chance = below == SAND ? SEEP_SAND : SEEP_MOSS;
         if ((rnd(s) & 1023) < chance) {
-            if (below == MOSS) {
+            if (MOSSY(below)) {
                 through_moss(s, x, y);
             } else if (y + 1 == s->h - 1) {     /* into the ground */
                 set_cell(s, x, y, CELL(EMPTY, 0));
@@ -927,7 +928,7 @@ static int rooted(Sim *s, int x, int y)
         return 1;
     for (int i = 1; i <= ROOT_DEPTH && y - i >= 0; i++) {
         int t = CELL_TYPE(s->cells[(y - i) * s->w + x]);
-        if (t == MOSS)
+        if (MOSSY(t))
             return 1;
         if (t != DIRT && t != WET_DIRT)
             return 0;
@@ -960,6 +961,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
     int t = CELL_TYPE(row[x]);
     switch (t) {
     case EMPTY: case STONE: case IRON: case GLASS: case WOOD: case LEAF: case ROOT:
+    case CRITTER:
         break;
     case WATER:
         update_water(s, row, next, x, y);
@@ -967,7 +969,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
     case SEED:
         update_seed(s, row, next, x, y);
         break;
-    case DIRT: case WET_DIRT: case MOSS:
+    case DIRT: case WET_DIRT: case MOSS: case WHEAT:
         /* During the drain, kept earth stays put. Other earth stops
          * clinging once the floor is open, or straight away when it rests
          * on a kept cell: kept roots, moss and iron never crumble, so what
@@ -981,7 +983,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
                 break;
             }
         }
-        if (t == MOSS) {
+        if (MOSSY(t)) {
             if (open_below(s, x, y))        /* held: straight down or not at all */
                 move(s, row, next, x, x, y);
             break;
@@ -1131,7 +1133,7 @@ static void grow_up(Sim *s, Tree *t)
 /* Soft ground a root can grow into (or along its own length). */
 static int root_soil(int c)
 {
-    return c == DIRT || c == WET_DIRT || c == SAND || c == MOSS || c == SHARD || c == ROOT;
+    return c == DIRT || c == WET_DIRT || c == SAND || MOSSY(c) || c == SHARD || c == ROOT;
 }
 
 /* Root r creeps one cell, sideways its own way about twice as often as
@@ -1420,7 +1422,7 @@ void sim_paint(Sim *s, int cx, int cy, int radius, int type)
                 if (CELL_TYPE(cell) == EMPTY && (rnd(s) & 3) == 0)
                     set_cell(s, x, y, CELL(SAND, grain_color(s)));
             } else if (CELL_TYPE(cell) != type) {
-                set_cell(s, x, y, CELL(type, rnd(s) & 0xFF));
+                set_cell(s, x, y, CELL(type, rnd(s) & 0x7F));
             }
         }
     }
@@ -1588,9 +1590,9 @@ int sim_strike(Sim *s)
             if (t == SAND && resting(s, x, y))
                 set_cell(s, x, y, CELL(GLASS, CELL_COLOR(c)));
             else if (t == DIRT || t == WET_DIRT)
-                set_cell(s, x, y, CELL(STONE, rnd(s) & 0xFF));
-            else if (t == STONE)
-                set_cell(s, x, y, CELL(IRON, rnd(s) & 0xFF));
+                set_cell(s, x, y, CELL(STONE, rnd(s) & 0x7F));
+            else if (t == STONE)     /* a stone hut stays the critters' */
+                set_cell(s, x, y, CELL(IRON, (rnd(s) & 0x7F) | (CELL_COLOR(c) & BUILT)));
         }
     }
     return 0;

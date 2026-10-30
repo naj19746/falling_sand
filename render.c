@@ -189,6 +189,57 @@ static void build_glass(uint32_t *glass, uint32_t *shard, const uint32_t *sand)
     }
 }
 
+/* Wheat by how much food is left in it: pale green when eaten down,
+ * deep gold when full. The rest of the color byte is texture. */
+static void build_wheat(uint32_t *pal)
+{
+    static const int lo[3] = {130, 170, 80}, hi[3] = {214, 166, 44};
+    for (int i = 0; i < 256; i++) {
+        int k = i & WHEAT_MAX, j = ((i >> 3) * 11 % 17) - 8;
+        uint32_t rgb = 0;
+        for (int ch = 0; ch < 3; ch++)
+            rgb = rgb << 8 | (uint32_t)(lo[ch] + (hi[ch] - lo[ch]) * k / WHEAT_MAX + j);
+        pal[i] = 0xFF000000u | rgb;
+    }
+}
+
+/* Critter parts, each slot tinted a little differently so neighbors can
+ * be told apart. */
+static void build_critter(uint32_t *pal)
+{
+    static const int part[6][3] = {
+        {236, 196, 150},    /* head */
+        { 24,  20,  28},    /* eye */
+        {206, 130,  84},    /* body */
+        {120,  76,  48},    /* leg */
+        {150,  98,  62},    /* leg, other step */
+        {200, 232, 255},    /* spark */
+    };
+    for (int i = 0; i < 256; i++) {
+        int p = i >> 5, j = (i & 31) * 7 % 15 - 7;
+        if (p > PART_SPARK)
+            p = PART_BODY;
+        int jj = p == PART_EYE || p == PART_SPARK ? 0 : j;
+        pal[i] = 0xFF000000u | (uint32_t)((part[p][0] + jj) << 16 |
+                                          (part[p][1] + jj / 2) << 8 | part[p][2]);
+    }
+}
+
+/* Stone and iron a critter placed: a little warmer and with a darker
+ * line along the bottom of every other cell's texture, so walls read as
+ * laid bricks. */
+static void build_built(uint32_t *pal)
+{
+    for (int i = BUILT; i < 256; i++) {
+        uint32_t c = pal[i & ~BUILT];
+        int r = (int)(c >> 16 & 0xFF), g = (int)(c >> 8 & 0xFF), b = (int)(c & 0xFF);
+        int d = i & 1 ? 0 : 12;
+        r = r + 14 - d; g = g + 4 - d; b = b - 8 - d;
+        pal[i] = 0xFF000000u | (uint32_t)((r < 0 ? 0 : r > 255 ? 255 : r) << 16 |
+                                          (g < 0 ? 0 : g) << 8 | (b < 0 ? 0 : b));
+    }
+}
+
 /* Everything but the X side: image size in chunks, chunk maps and color
  * tables. Needs w, h, scale, cw, ch, pw and ph set. */
 static int render_setup(Render *r, const PaletteDef *pd)
@@ -213,7 +264,7 @@ static int render_setup(Render *r, const PaletteDef *pd)
         return -1;
 
     uint32_t autumn[256];
-    for (int t = 0; t < 16; t++)
+    for (int t = 0; t < 32; t++)
         for (int i = 0; i < 256; i++)
             r->lut[t][i] = BG_COLOR;
     build_palette(r->lut[SAND], pd);
@@ -234,6 +285,11 @@ static int render_setup(Render *r, const PaletteDef *pd)
     build_glass(r->lut[GLASS], r->lut[SHARD], r->lut[SAND]);
     for (int i = 0; i < 256; i++)
         r->lut[SEED][i] = SEED_COLOR;
+    build_earth(r->lut[BODY], 112, 112, 116);
+    build_wheat(r->lut[WHEAT]);
+    build_critter(r->lut[CRITTER]);
+    build_built(r->lut[STONE]);
+    build_built(r->lut[IRON]);
     return 0;
 }
 
@@ -318,7 +374,7 @@ void render_invalidate(Render *r)
 
 static inline uint32_t cell_color(const Render *r, uint16_t c)
 {
-    return r->lut[CELL_TYPE(c) & 15][CELL_COLOR(c)];
+    return r->lut[CELL_TYPE(c) & 31][CELL_COLOR(c)];
 }
 
 /* 50/50 blend toward the ring color. */

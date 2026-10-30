@@ -23,7 +23,7 @@ typedef struct {
     int             use_shm;
 
     /* Pixel color for each cell, by type then color byte. */
-    uint32_t        lut[16][256];
+    uint32_t        lut[32][256];
     int             w, h;           /* grid size */
     int             pw, ph;         /* window size in pixels */
     int             scale;
