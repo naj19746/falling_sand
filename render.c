@@ -262,6 +262,8 @@ static int render_setup(Render *r, const PaletteDef *pd)
     r->dirty = calloc((size_t)r->cw * r->ch, 1);
     if (!r->dirty)
         return -1;
+    for (int i = 0; i < MAX_CRITTERS; i++)
+        r->carry_at[i][0] = r->carry_at[i][1] = -1;
 
     uint32_t autumn[256];
     for (int t = 0; t < 32; t++)
@@ -535,6 +537,45 @@ static void draw_bolt(Render *r, const Sim *s, int frame)
         }
 }
 
+/* Where critter i's carried cell shows: just over its head, on the side
+ * it faces. Returns 0 if it isn't carrying anything. */
+static int carry_spot(const Render *r, const Sim *s, int i, int *x, int *y)
+{
+    const Critter *c = &s->crit[i];
+    if (c->state == CR_FREE || !c->carry)
+        return 0;
+    *x = c->x + (c->w > 1 && c->face > 0);
+    *y = c->y - c->h;
+    return *x >= 0 && *x < r->w && *y >= 0 && *y < r->h;
+}
+
+static void draw_carried(Render *r, const Sim *s)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        int x, y;
+        if (carry_spot(r, s, i, &x, &y))
+            put_cell(r, x, y, cell_color(r, s->crit[i].carry));
+    }
+}
+
+/* A carried cell moves with its critter: redraw the chunks it left and
+ * the ones it's in now, only when it moves. */
+static void mark_carried(Render *r, const Sim *s)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        int x = -1, y = -1, *prev = r->carry_at[i];
+        carry_spot(r, s, i, &x, &y);
+        if (x == prev[0] && y == prev[1])
+            continue;
+        if (prev[0] >= 0)
+            r->dirty[(prev[1] >> CHUNK_SHIFT) * r->cw + (prev[0] >> CHUNK_SHIFT)] = 1;
+        if (x >= 0)
+            r->dirty[(y >> CHUNK_SHIFT) * r->cw + (x >> CHUNK_SHIFT)] = 1;
+        prev[0] = x;
+        prev[1] = y;
+    }
+}
+
 /* Draw the overlays over the chunks in the image and send them. */
 static void flush(Render *r, const Sim *s, int show_ring, int show_bolt, int bolt_frame)
 {
@@ -542,6 +583,7 @@ static void flush(Render *r, const Sim *s, int show_ring, int show_bolt, int bol
         return;
     if (show_ring)
         draw_ring(r, s, &s->bl);
+    draw_carried(r, s);
     if (show_bolt)
         draw_bolt(r, s, bolt_frame);
 
@@ -590,6 +632,7 @@ void render_draw(Render *r, Sim *s)
     overlay_box(r, show_bolt, bb[0], bb[1], bb[2], bb[3], r->bolt_box, &r->have_bolt);
 
     int bolt_frame = show_bolt ? BOLT_FRAMES + 1 - r->bolt_frames-- : 0;
+    mark_carried(r, s);
 
     /* Pack each horizontal run of dirty chunks into the image, wrapping
      * to the next row of it when one doesn't fit; once it's full, send

@@ -39,6 +39,7 @@ typedef struct {
     int             bolt_frames;    /* frames left to show it */
     int             bolt_box[4];    /* chunk box it covered last frame */
     int             have_bolt;
+    int             carry_at[MAX_CRITTERS][2];  /* cell a carried cell was drawn at, or -1 */
 
     /* --profile counters, reset by the caller */
     long            chunks_drawn;

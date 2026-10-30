@@ -46,6 +46,13 @@
  * of wall-clock time (sim.c sweeps them). */
 #define DIE_MOVES   3
 
+/* Burial: buried deeper than BURY_DEPTH loose cells in every column (or
+ * with sand on its head and no way to dig up) for BURY_SECS in all, it
+ * suffocates. Digging up through sand moves it one row each DIG_SECS. */
+#define BURY_DEPTH  10
+#define BURY_SECS   60.0f
+#define DIG_SECS    1.0f
+
 enum { G_NONE, G_WANDER, G_EAT, G_DIE };
 
 static int secs(const Sim *s, float sec)
@@ -162,8 +169,38 @@ static void relocate(Sim *s, int i, int nx, int ny)
                 set_cell(s, xx, yy, water[--nw] & ~(SEEPING << 8));
 }
 
+/* Loose stuff a critter digs through. Not water (it just wades), and
+ * not moss or wheat, which it leaves for food. */
+static int diggable(int t)
+{
+    return FALLS(t) && !MOSSY(t);
+}
+
+/* Put cell v down near critter c, on the side away from d: the first
+ * open cell going up the column behind it, or on its head. Returns 0 if
+ * there's nowhere to put it. */
+static int drop_behind(Sim *s, Critter *c, int d, uint16_t v)
+{
+    int bx = d > 0 ? c->x - 1 : c->x + c->w;
+    if (bx >= 0 && bx < s->w)
+        for (int y = c->y; y >= c->y - c->h && y >= 0; y--)
+            if (CELL_TYPE(at(s, bx, y)) == EMPTY) {
+                set_cell(s, bx, y, v);
+                return 1;
+            }
+    int hy = c->y - c->h;
+    for (int x = c->x; x < c->x + c->w && hy >= 0; x++)
+        if (CELL_TYPE(at(s, x, hy)) == EMPTY) {
+            set_cell(s, x, hy, v);
+            return 1;
+        }
+    return 0;
+}
+
 /* Move one cell sideways (d = -1 or 1): straight across, or up a
- * one-cell step. Returns 1 if it moved. */
+ * one-cell step. Blocked by loose stuff, it digs out the top cell in the
+ * way and throws it over its shoulder instead. Returns 1 if it moved or
+ * dug. */
 static int step_side(Sim *s, int i, int d)
 {
     Critter *c = &s->crit[i];
@@ -178,8 +215,97 @@ static int step_side(Sim *s, int i, int d)
         relocate(s, i, c->x + d, c->y - 1);
         return 1;
     }
+    /* The column it's stepping into, from a step up down to its feet. */
+    int nx = d > 0 ? c->x + c->w : c->x - 1;
+    if (nx >= 0 && nx < s->w)
+        for (int y = c->y - c->h; y <= c->y; y++) {
+            if (y < 0)
+                continue;
+            uint16_t v = at(s, nx, y);
+            int t = CELL_TYPE(v);
+            if (t == EMPTY || t == WATER)
+                continue;
+            if (!diggable(t))
+                break;
+            set_cell(s, nx, y, CELL(EMPTY, 0));
+            if (!drop_behind(s, c, d, v)) {
+                set_cell(s, nx, y, v);
+                break;
+            }
+            c->state = CR_DIG;
+            draw(s, i);
+            return 1;
+        }
     draw(s, i);
     return 0;
+}
+
+/* Loose cells (not water) piled on critter c's head: the least over any
+ * of its columns, and whether there's any at all. */
+static int buried_under(const Sim *s, const Critter *c, int *any)
+{
+    int least = 1 << 30;
+    *any = 0;
+    for (int x = c->x; x < c->x + c->w; x++) {
+        int n = 0;
+        for (int y = c->y - c->h; y >= 0 && FALLS(CELL_TYPE(at(s, x, y))); y--)
+            n++;
+        if (n)
+            *any = 1;
+        if (n < least)
+            least = n;
+    }
+    return least;
+}
+
+/* Wriggle up one row through the loose cells on its head: they end up
+ * under its feet. Returns 0 if something solid is in the way. */
+static int dig_up(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    int hy = c->y - c->h;
+    uint16_t v[2];
+    if (hy < 0)
+        return 0;
+    for (int k = 0; k < c->w; k++) {
+        v[k] = at(s, c->x + k, hy);
+        int t = CELL_TYPE(v[k]);
+        if (t != EMPTY && t != WATER && !FALLS(t))
+            return 0;
+    }
+    for (int k = 0; k < c->w; k++)
+        set_cell(s, c->x + k, hy, CELL(EMPTY, 0));
+    int oy = c->y;
+    relocate(s, i, c->x, c->y - 1);
+    for (int k = 0; k < c->w; k++)
+        if (CELL_TYPE(at(s, c->x + k, oy)) == EMPTY)
+            set_cell(s, c->x + k, oy, v[k]);
+    c->state = CR_DIG;
+    return 1;
+}
+
+/* Put what it carries down at (x, y). */
+static void put_down(Sim *s, Critter *c, int x, int y)
+{
+    set_cell(s, x, y, c->carry);
+    c->carry = 0;
+}
+
+/* Drop what it's carrying on the nearest open cell around it (dying, or
+ * leaving). It's lost only if it's boxed in. */
+static void drop_carry(Sim *s, Critter *c)
+{
+    if (!c->carry)
+        return;
+    for (int r = 0; r <= 2; r++)
+        for (int y = c->y - c->h - r; y <= c->y + r; y++)
+            for (int x = c->x - 1 - r; x <= c->x + c->w + r; x++)
+                if (x >= 0 && x < s->w && y >= 0 && y < s->h &&
+                    CELL_TYPE(at(s, x, y)) == EMPTY) {
+                    put_down(s, c, x, y);
+                    return;
+                }
+    c->carry = 0;
 }
 
 /* Cells critter c can touch without moving: its own body and the ring
@@ -357,10 +483,13 @@ static void free_slot(Sim *s, int i)
 
 /* Lay the body down as a line of BODY cells, one wider than the critter,
  * along its bottom row where that fits, else in its own column. */
+static void start_dying(Sim *s, Critter *c);
+
 static void lay_body(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
     int n = c->w + 1, y = c->y;
+    drop_carry(s, c);
     for (int yy = c->y - c->h + 1; yy <= c->y; yy++)
         for (int xx = c->x; xx < c->x + c->w; xx++)
             set_cell(s, xx, yy, CELL(EMPTY, 0));
@@ -438,8 +567,26 @@ static void critter_tick(Sim *s, int i)
         c->next_move = s->frame + FALL_STEPS;
         return;
     }
-    if (c->state == CR_FALLING)
+    if (c->state == CR_FALLING || c->state == CR_DIG)
         c->state = CR_IDLE;
+
+    /* Sand on its head: dig up through it before anything else. Buried
+     * deep, or stuck under it, it's running out of air. */
+    int any, load = buried_under(s, c, &any);
+    if (any) {
+        int dug = s->frame >= c->dig_at && dig_up(s, i);
+        if (dug)
+            c->dig_at = s->frame + csecs(s, c, DIG_SECS);
+        if (load > BURY_DEPTH || (!dug && s->frame >= c->dig_at))
+            c->buried_steps += (uint32_t)csecs(s, c, MOVE_SECS);
+        if (c->buried_steps >= (uint32_t)secs(s, BURY_SECS)) {
+            start_dying(s, c);
+            return;
+        }
+        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
+        return;
+    }
+    c->buried_steps = 0;
 
     if (s->frame >= c->next_think)
         think(s, i);

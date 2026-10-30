@@ -154,6 +154,7 @@ typedef struct {
     uint32_t next_think;    /* sim frame of the next decision */
     uint32_t next_move;     /* sim frame of the next move or fall */
     uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
+    uint32_t dig_at;        /* sim frame it can next dig up */
 } Critter;
 
 enum { PHASE_FILL, PHASE_DRAIN };
