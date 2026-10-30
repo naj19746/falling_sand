@@ -282,6 +282,8 @@ typedef struct {
     long caught;            /* drops critters caught */
     long guttered;          /* drops run off roofs into wells */
     long flung;             /* grains critters flung off ledges */
+    long seeds_caught;      /* seeds critters caught */
+    long seeded;            /* seeds planted on ledges as iron */
     int critters;           /* slots in use */
 } Sim;
 

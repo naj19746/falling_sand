@@ -115,6 +115,15 @@
  * It only counts sand piled at most LEDGE_PILE deep on the stone. */
 #define LEDGE_PILE  12
 
+/* Seeds: a critter sprints under a falling seed as for a raindrop, ahead
+ * of anything but eating, and plants it on the nearest stone ledge: up to
+ * SEED_IRON cells along the ledge's top turn to iron, which outlasts the
+ * drain, and the sand on them (or the open cell above) to dirt, which the
+ * iron holds through the drain too. A home site over iron counts
+ * IRON_BONUS cells nearer. */
+#define SEED_IRON   9
+#define IRON_BONUS  SENSE
+
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
  * most once every PLANT_SECS. Dirt isn't food: it still takes water to
@@ -127,7 +136,7 @@
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE, G_SEED, G_PLANT };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -1002,7 +1011,7 @@ static int rank_stone(const Sim *s, int x, int y)
         return near_home(s, x, y) ? -1 : 1;
     /* Bare dry dirt pressed into brick, when there's no stone. Not dirt
      * under moss: that's a field. */
-    if (t == DIRT && open_above(s, x, y))
+    if (t == DIRT && open_above(s, x, y) && (y + 1 >= s->h || CELL_TYPE(at(s, x, y + 1)) != IRON))
         return near_home(s, x, y) ? -1 : 2;
     return -1;
 }
@@ -1163,6 +1172,12 @@ static int find_site_w(Sim *s, int i, int ww, Home *out)
         int d = abs(x0 + hw / 2 - c->x) + abs(f - c->y);
         if (x0 < TOSS_RANGE || x0 + hw > s->w - TOSS_RANGE)
             d -= EDGE_BONUS;
+        /* Iron under it keeps it (and its field) through the drain. */
+        int iron = 0;
+        for (int x = x0; x < x0 + hw && !iron && f + 1 < s->h; x++)
+            iron = CELL_TYPE(at(s, x, f + 1)) == IRON || CELL_TYPE(at(s, x, f)) == IRON;
+        if (iron)
+            d -= IRON_BONUS;
         if (d - FOOD_BONUS >= best)
             continue;
         /* Food near the middle of it makes it better. */
@@ -1562,6 +1577,65 @@ static void clear_ledge(Sim *s, int i)
     end_goal(s, c);
 }
 
+/* Where to plant a seed: the bare top of a stone ledge, or sand on one. */
+static int rank_seed_spot(const Sim *s, int x, int y)
+{
+    uint16_t v = at(s, x, y);
+    if (CELL_TYPE(v) == STONE && !built(v) && open_above(s, x, y))
+        return 0;
+    return rank_ledge(s, x, y) == 0 ? 1 : -1;
+}
+
+/* The top of the ledge under the goal turns to iron, up to SEED_IRON
+ * cells along it, with dirt on top. */
+static void plant_seed(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    uint16_t v = at(s, c->tx, c->ty);
+    int top = CELL_TYPE(v) == STONE && !built(v) ? c->ty : ledge_under(s, c->tx, c->ty);
+    if (top < 0 || CELL_TYPE(c->carry) != SEED) {
+        end_goal(s, c);
+        return;
+    }
+    int xs[SEED_IRON], ys[SEED_IRON], n = 0;
+    xs[n] = c->tx;
+    ys[n++] = top;
+    /* Out along the ledge both ways, a cell at a time. */
+    int end[2] = {c->tx, c->tx}, ey[2] = {top, top}, open[2] = {1, 1};
+    for (int k = 0; n < SEED_IRON && (open[0] || open[1]); k ^= 1) {
+        if (!open[k])
+            continue;
+        int nx = end[k] + (k ? 1 : -1), ny = -1;
+        for (int yy = ey[k] - 1; yy <= ey[k] + 1 && ny < 0 && nx >= 0 && nx < s->w; yy++)
+            if (yy > 0 && yy < s->h && CELL_TYPE(at(s, nx, yy)) == STONE &&
+                !built(at(s, nx, yy)) && CELL_TYPE(at(s, nx, yy - 1)) != STONE)
+                ny = yy;
+        if (ny < 0) {
+            open[k] = 0;
+            continue;
+        }
+        end[k] = nx;
+        ey[k] = ny;
+        xs[n] = nx;
+        ys[n++] = ny;
+    }
+    for (int k = 0; k < n; k++) {
+        int x = xs[k], y = ys[k];
+        set_cell(s, x, y, CELL(IRON, (CELL_COLOR(at(s, x, y)) & 0x7F) | BUILT));
+        /* The sand piled on it turns to dirt, or a cell of dirt goes on
+         * the bare iron. */
+        int yy = y - 1;
+        if (yy >= 0 && CELL_TYPE(at(s, x, yy)) == EMPTY)
+            set_cell(s, x, yy, CELL(DIRT, rnd(s) & 0xFF));
+        for (; yy >= 0 && y - yy <= LEDGE_PILE && CELL_TYPE(at(s, x, yy)) == SAND; yy--)
+            set_cell(s, x, yy, CELL(DIRT, rnd(s) & 0xFF));
+    }
+    c->carry = 0;
+    c->fails = 0;
+    s->seeded++;
+    end_goal(s, c);
+}
+
 /* Tossing can still take away some of what the emitters poured this
  * stall window. */
 static int toss_room(const Sim *s)
@@ -1738,7 +1812,7 @@ static void eat(Sim *s, int i)
     end_goal(s, c);
 }
 
-static int falling_drop(const Sim *s, const Critter *c, int *dx);
+static int falling(const Sim *s, const Critter *c, int seed, int *dx);
 
 /* Something to do with what it's holding: water goes on the field or in
  * the well, stone and iron into the plan, and anything else is dumped
@@ -1773,6 +1847,13 @@ static int use_carry(Sim *s, int i)
             c->state = CR_CARRY;
             return 1;
         }
+    } else if (t == SEED) {
+        if (find_best(s, i, rank_seed_spot, &x, &y) || find_far(s, i, rank_seed_spot, &x, &y)) {
+            set_goal(s, c, G_PLANT, x, y);
+            c->state = CR_CARRY;
+            return 1;
+        }
+        /* No ledge anywhere: let it fall and sprout where it lands. */
     } else if (t == STONE || t == IRON) {
         if (h && next_build(s, h, &x, &y) && !avoided(s, c, x, y)) {
             set_goal(s, c, G_BUILD, x, y);
@@ -1915,7 +1996,7 @@ static void think(Sim *s, int i)
 
     /* Rain falling nearby: run under it. */
     int dx;
-    if (c->thirsty && !c->carry && falling_drop(s, c, &dx)) {
+    if (c->thirsty && !c->carry && falling(s, c, 0, &dx)) {
         set_goal(s, c, G_CATCH, dx, c->y);
         return;
     }
@@ -2020,10 +2101,27 @@ static void catch_drop(Sim *s, int i)
         }
 }
 
-/* A raindrop falling within CATCH_RANGE columns, above it, that it can
- * sprint under before the drop gets down to its head. Gives the column
- * to stand in to catch the nearest one. */
-static int falling_drop(const Sim *s, const Critter *c, int *dx)
+/* Grab a seed in reach, falling or just landed. */
+static void catch_seed(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    for (int y = c->y - c->h; y <= c->y + 1; y++)
+        for (int x = c->x - 1; x <= c->x + c->w; x++) {
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h || CELL_TYPE(at(s, x, y)) != SEED)
+                continue;
+            c->carry = at(s, x, y);
+            set_cell(s, x, y, CELL(EMPTY, 0));
+            s->seeds_caught++;
+            if (c->goal == G_SEED || c->goal == G_CATCH || c->goal == G_WANDER)
+                end_goal(s, c);
+            return;
+        }
+}
+
+/* A raindrop (or a seed) falling within CATCH_RANGE columns, above it,
+ * that it can sprint under before it gets down to its head. Gives the
+ * column to stand in to catch the nearest one. */
+static int falling(const Sim *s, const Critter *c, int seed, int *dx)
 {
     int best = CATCH_RANGE + 1, move = csecs(s, c, MOVE_SECS / SPRINT);
     if (move < 1)
@@ -2033,11 +2131,15 @@ static int falling_drop(const Sim *s, const Critter *c, int *dx)
             continue;
         for (int y = 0; y < c->y - c->h; y++) {
             uint16_t v = at(s, x, y);
-            if (CELL_TYPE(v) == WATER && (CELL_COLOR(v) & RAIN_FRESH)) {
-                /* It's in reach one column out from its body. */
+            if (seed ? CELL_TYPE(v) == SEED
+                     : CELL_TYPE(v) == WATER && (CELL_COLOR(v) & RAIN_FRESH)) {
+                /* It's in reach one column out from its body, if nothing
+                 * stops it first. */
                 int to = x < c->x - 1 ? x + 1 : x > c->x + c->w ? x - c->w : c->x;
-                int d = abs(to - c->x);
-                if (d < best && d * move <= c->y - c->h - y) {
+                int d = abs(to - c->x), clear = 1;
+                for (int yy = y + 1; yy < c->y - c->h && clear; yy++)
+                    clear = CELL_TYPE(at(s, x, yy)) == EMPTY;
+                if (clear && d < best && d * move <= c->y - c->h - y) {
                     best = d;
                     *dx = to;
                 }
@@ -2062,6 +2164,8 @@ static void critter_tick(Sim *s, int i)
             start_dying(s, c);
         }
     }
+    if (!c->carry && c->goal != G_DIE)
+        catch_seed(s, i);
     if (c->thirsty && !c->carry && c->goal != G_DIE)
         catch_drop(s, i);
     if (s->frame < c->next_move)
@@ -2115,16 +2219,25 @@ static void critter_tick(Sim *s, int i)
 
     if (s->frame >= c->next_think)
         think(s, i);
-    /* Rain coming down: between other things, it looks every move. */
+    /* Rain or a seed coming down: it looks every move. A seed comes
+     * before anything but eating. */
     int dx;
-    if (c->thirsty && !c->carry &&
-        (c->goal == G_NONE || c->goal == G_WANDER || c->goal == G_CATCH) &&
-        falling_drop(s, c, &dx))
+    if (!c->carry && c->goal != G_DIE && c->goal != G_LEAVE && c->goal != G_SHELTER &&
+        c->goal != G_EAT && falling(s, c, 1, &dx)) {
+        if (c->goal != G_SEED)
+            set_goal(s, c, G_SEED, dx, c->y);
+        c->tx = dx;
+    } else if (c->thirsty && !c->carry &&
+               (c->goal == G_NONE || c->goal == G_WANDER || c->goal == G_CATCH) &&
+               falling(s, c, 0, &dx)) {
         set_goal(s, c, G_CATCH, dx, c->y);
-    c->next_move = s->frame + csecs(s, c, c->goal == G_CATCH ? MOVE_SECS / SPRINT : MOVE_SECS);
+    }
+    int sprint = c->goal == G_CATCH || c->goal == G_SEED;
+    c->next_move = s->frame + csecs(s, c, sprint ? MOVE_SECS / SPRINT : MOVE_SECS);
 
     switch (c->goal) {
     case G_CATCH:
+    case G_SEED:
     case G_WANDER:
     case G_DETOUR: {
         /* Digging counts as a step, but sand can slide back in as fast
@@ -2176,6 +2289,10 @@ static void critter_tick(Sim *s, int i)
     case G_LEDGE:
         if (approach(s, i))
             clear_ledge(s, i);
+        break;
+    case G_PLANT:
+        if (approach(s, i))
+            plant_seed(s, i);
         break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,

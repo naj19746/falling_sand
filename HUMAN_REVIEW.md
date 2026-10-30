@@ -327,6 +327,43 @@ different rocks, plan two separate homes, and the large one's 21-wide
 well on loose sand gets 10 of 55 cells in 4 hours. It passed before this
 change.
 
+### Follow-up: seeds make iron
+
+Asked for next: a critter turns stone to iron with a seed.
+
+- A critter sprints under a falling seed the way it does for a raindrop,
+  ahead of anything but eating. It only goes for one (seed or drop) that
+  falls clear all the way down to it. Before this change it would also
+  chase drops about to land on a ledge over its head.
+- It plants the seed on the nearest stone ledge: up to 9 cells along the
+  ledge's top turn to built iron, and the sand on them (or the open cell
+  above) turns to dirt. With no ledge anywhere, it lets the seed go to
+  sprout where it lands.
+- A home site with iron under it counts 40 cells nearer.
+- Seeded iron is `BUILT` and outside any plan, so nobody mines it. It
+  rusts like other iron: I didn't add an exemption.
+- t15 checks it end to end: the seed is caught, 9 ledge cells turn to
+  iron with dirt on 7, and after a drain all 9 iron cells and 6 of the
+  dirt are still there.
+
+**Realistic matrix (same 8 seeds x 3 days): no change.** Seeds fall at
+random, about one every 16 minutes, and a critter can reach a few percent
+of the screen's columns. typical and showers: no seed was caught in any
+run. starve240: 0-2 caught per run, 0-2 planted. Survival is the same as
+before: 0/8, 0/8, 6/8.
+
+**Experiment, not committed:** every new critter arrives carrying a
+seed. Every critter then plants one (6-7 per run), but:
+- seeded iron is mostly gone by evening (0-18 cells left). With ~49
+  fills a day, rust takes a given piece in about 10 fills (~90 min).
+- dirt on the iron rarely turns to moss (0-5 cells at evening). It needs
+  two pours on the same spot within 10 minutes.
+- critters spend 1-11% of their time trying to eat, and no bites in any
+  run. Survival: typical 0/8 (0.9 h), starve240 6/8 (5.3-6.0 h).
+
+The next levers would be exempting seeded iron from rust and moss from a
+single pour, or arriving with a seed. Those are design calls.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
