@@ -543,7 +543,7 @@ static void draw_bolt(Render *r, const Sim *s, int frame)
 static int carry_spot(const Render *r, const Sim *s, int i, int *x, int *y)
 {
     const Critter *c = &s->crit[i];
-    if (c->state == CR_FREE || !c->carry)
+    if (c->state == CR_FREE || c->state == CR_AWAY || !c->carry)
         return 0;
     *x = c->x + (c->w > 1 && c->face > 0);
     *y = c->y - c->h;

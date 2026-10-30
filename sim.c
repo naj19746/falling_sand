@@ -365,9 +365,13 @@ static void clear_unkept(Sim *s)
         if (s->keep && s->keep[i])
             continue;
         int t = CELL_TYPE(s->cells[i]);
+        if (t == WATER && well_holds(s, i % s->w, i / s->w))
+            continue;
         if (t != EMPTY && t != CRITTER)
             set_cell(s, i % s->w, i / s->w, CELL(EMPTY, 0));
     }
+    if (s->critters)
+        critters_refill(s);
     for (int i = 0; i < s->n_emitters; i++) {
         s->em[i].burst_left = 0;
         s->em[i].idle_left = i * 60 + (int)(rnd(s) % 60);
@@ -393,6 +397,8 @@ void sim_start_drain(Sim *s)
     s->phase = PHASE_DRAIN;
     s->drain_steps = 0;
     mark_kept(s);
+    if (s->critters)
+        critters_drain(s);
     /* Keep trees whose base cell is kept; drop the rest. */
     int nt = 0;
     for (int i = 0; i < MAX_TREES; i++) {
@@ -732,6 +738,8 @@ static void phase_through(Sim *s, uint16_t *row, int x, int y)
     int w = s->w;
     if (s->phase != PHASE_DRAIN || y + 1 >= s->h || !s->keep[(y + 1) * w + x])
         return;
+    if (CELL_TYPE(row[x]) == WATER && well_holds(s, x, y))
+        return;                             /* it stays in the well */
     stay_awake(s, x, y);
     if ((rnd(s) & 1023) >= phase_chance(s))
         return;

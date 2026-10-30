@@ -82,7 +82,7 @@
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -1592,6 +1592,8 @@ static void start_dying(Sim *s, Critter *c)
     c->next_move = s->frame;
 }
 
+static void leave(Sim *s, int i);
+
 static void critter_tick(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
@@ -1688,6 +1690,21 @@ static void critter_tick(Sim *s, int i)
         if (approach(s, i))
             swap_in(s, i);
         break;
+    case G_SHELTER:
+        /* Into the hut, then wait there for the next fill. Given up on,
+         * it waits where it is. */
+        if (!in_reach(c, c->tx, c->ty) && !approach(s, i) && c->goal != G_SHELTER)
+            set_goal(s, c, G_SHELTER, c->x, c->y);
+        c->state = CR_IDLE;
+        break;
+    case G_LEAVE:
+        /* Off the side of the screen, digging through whatever's in the
+         * way; there it leaves until the next fill. */
+        if (c->tx <= 0 ? c->x <= 0 : c->x + c->w >= s->w)
+            leave(s, i);
+        else
+            step_side(s, i, c->tx <= 0 ? -1 : 1);
+        break;
     case G_DUMP:
         /* Far enough out, or as far as it can get: put it down. Here
          * best counts the moves that went nowhere. */
@@ -1728,7 +1745,7 @@ void charge_critters(Sim *s)
     uint32_t until = s->frame + (uint32_t)secs(s, CHARGE_MINUTES * 60.0f);
     for (int i = 0; i < MAX_CRITTERS; i++) {
         Critter *c = &s->crit[i];
-        if (c->state == CR_FREE)
+        if (c->state == CR_FREE || c->state == CR_AWAY)
             continue;
         /* From the middle of its body. */
         int dx = c->x + c->w / 2 - b->tx, dy = c->y - c->h / 2 - b->ty;
@@ -1742,12 +1759,109 @@ void charge_critters(Sim *s)
     }
 }
 
+/* ---- The drain ---- */
+
+/* Every cell of the hut, roof and floor, is iron: it'll come through. */
+static int hut_iron(const Sim *s, const Home *h)
+{
+    int hx = hut_x(h);
+    for (int x = hx; x < hx + 5; x++)
+        if (CELL_TYPE(at(s, x, h->y)) != IRON || CELL_TYPE(at(s, x, h->y - 4)) != IRON)
+            return 0;
+    return 1;
+}
+
+/* Off the screen: its body leaves the grid, and it keeps its food and
+ * whatever it was carrying until it comes back. */
+static void leave(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    for (int y = c->y - c->h + 1; y <= c->y; y++)
+        for (int x = c->x; x < c->x + c->w; x++)
+            set_cell(s, x, y, CELL(EMPTY, 0));
+    c->state = CR_AWAY;
+    c->goal = G_NONE;
+    c->face = c->x < s->w / 2 ? 1 : -1;     /* the way back in */
+}
+
+void critters_drain(Sim *s)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        Critter *c = &s->crit[i];
+        if (c->state == CR_FREE || c->state == CR_AWAY || c->goal == G_DIE)
+            continue;
+        const Home *h = c->home >= 0 ? &s->home[c->home] : NULL;
+        int on_kept = c->y + 1 < s->h && (s->keep[(c->y + 1) * s->w + c->x] ||
+                                          s->keep[(c->y + 1) * s->w + c->x + c->w - 1]);
+        if (h && hut_iron(s, h)) {
+            set_goal(s, c, G_SHELTER, hut_x(h) + 2, h->y - 1);
+            c->state = CR_WALK;
+        } else if (on_kept) {
+            set_goal(s, c, G_SHELTER, c->x, c->y);
+        } else {
+            set_goal(s, c, G_LEAVE, c->x < s->w / 2 ? 0 : s->w - c->w, c->y);
+        }
+    }
+}
+
+/* Half or more of a home's plan is still standing. */
+static int home_stands(const Sim *s, const Home *h)
+{
+    int have = 0, want = 0;
+    int top = well_top(h) < h->y - 4 ? well_top(h) : h->y - 4;
+    for (int y = top; y <= h->y; y++)
+        for (int x = h->x; x < h->x + HOME_W; x++)
+            if (plan_at(h, x, y) == P_WALL) {
+                want++;
+                have += built(at(s, x, y));
+            }
+    return 2 * have >= want;
+}
+
+void critters_refill(Sim *s)
+{
+    /* Anyone still walking off is lifted out now. */
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        Critter *c = &s->crit[i];
+        if (c->state != CR_FREE && c->state != CR_AWAY && c->goal == G_LEAVE)
+            leave(s, i);
+    }
+    for (int k = 0; k < MAX_HOMES; k++) {
+        Home *h = &s->home[k];
+        if (!h->used || home_stands(s, h))
+            continue;
+        memset(h, 0, sizeof *h);
+        for (int i = 0; i < MAX_CRITTERS; i++)
+            if (s->crit[i].home == k)
+                s->crit[i].home = -1;
+    }
+    /* Back in from the side each left by, dropping from the top. */
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        Critter *c = &s->crit[i];
+        if (c->state == CR_AWAY) {
+            c->y = c->h - 1;
+            c->x = c->face > 0 ? 0 : s->w - c->w;
+            for (int k = 0; k < SENSE && !fits(s, i, c->x, c->y); k++)
+                c->x += c->face;
+            if (!fits(s, i, c->x, c->y))
+                continue;       /* no room: it waits for the next one */
+            c->state = CR_FALLING;
+            c->goal = G_NONE;
+            c->ax = 0;
+            c->next_move = s->frame;
+            draw(s, i);
+        } else if (c->state != CR_FREE && c->goal == G_SHELTER) {
+            end_goal(s, c);
+        }
+    }
+}
+
 void update_critters(Sim *s)
 {
     if (!s->critters_on)
         return;
     for (int i = 0; i < MAX_CRITTERS; i++)
-        if (s->crit[i].state != CR_FREE)
+        if (s->crit[i].state != CR_FREE && s->crit[i].state != CR_AWAY)
             critter_tick(s, i);
 }
 

@@ -156,6 +156,30 @@ static inline int in_well(const Sim *s, int x, int y)
     return 0;
 }
 
+/* Inside a well with an iron floor, whose water is kept through the
+ * drain like the iron itself. */
+static inline int well_holds(const Sim *s, int x, int y)
+{
+    for (int k = 0; k < MAX_HOMES; k++) {
+        const Home *h = &s->home[k];
+        if (!h->used || x < h->wx0 || x > h->wx1 || y < h->wy0 || y > h->wy1)
+            continue;
+        for (int xx = h->wx0 - 1; xx <= h->wx1 + 1; xx++)
+            if (CELL_TYPE(s->cells[h->y * s->w + xx]) != IRON)
+                return 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* critter.c: the drain is starting; critters without an iron hut head
+ * off the screen. */
+void critters_drain(Sim *s);
+
+/* critter.c: the drain is over and the screen cleared: homes that didn't
+ * survive are forgotten, and critters who left come back. */
+void critters_refill(Sim *s);
+
 /* critter.c: a bolt just struck (s->bolt); critters near it get charged. */
 void charge_critters(Sim *s);
 
