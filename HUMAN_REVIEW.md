@@ -205,6 +205,48 @@ These are design calls, so I didn't make them:
 My guess is A+B gives the plan's intended feel with the least change to
 how the sandbox looks.
 
+### Follow-up: gutters, wide wells, sprinting
+
+Asked for after the first review: option B's gutters, wells as wide as
+the ground allows, and a sprint when chasing drops.
+
+- **Gutters:** rain landing on a built hut or well roof goes straight into
+  the lowest open cell of that well (`gutter()` in critter.c, called from
+  sim.c where a drop lands). It moves at once; nothing animates along the
+  roof. Check whether that looks right to you.
+- **Wide wells:** a new home takes the widest well (21, 19, ... 7 with
+  walls) whose footprint is level. A wider well costs more stone, so
+  critters now look anywhere on screen for building stone when none is in
+  sight. They also dig loose earth away from outside an unfinished well
+  wall: a 13-wide well in t9 had stalled against a dirt bank.
+- **Sprint:** chasing a drop, a critter moves at twice its pace. It only
+  goes after a drop it can get under before the drop reaches its head,
+  and it checks every move, not every second.
+
+Measured in isolation (t12/t13 in the harness):
+
+| Well width (walls included) | Rain into the well at 3 drops/min |
+|---|---|
+| before gutters (mouth only) | ~0.4/h |
+| 7 | 3.2/h |
+| 11 | 5.2/h |
+| 15 | 6.0/h |
+| 21 | 9.2/h |
+
+- **Catching:** a small critter now catches a drop up to 12 columns out
+  from a standing start (it was about 8), and misses at 16 or more.
+- **Build time:** a 21-wide home on flat ground with stone nearby is
+  fully built in 65 minutes.
+
+**Realistic matrix (same 8 seeds x 3 days): no change.** typical and
+showers: 0/8 alive, mean life 0.9 h. starve240: 6/8, 5.3-6.2 h. Nobody
+eats in any run. No critter ever plans a home, so `guttered` is 0 in
+every run. Each run catches 0-14 drops in 3 days, because a critter only
+wants water when it has earth to pour on or a well. A home site needs
+moss within 20 cells, and the 9-minute fill buries moss first. So these
+changes only pay off once something like option A gives critters
+ground that lasts: a starting patch, or relaxing the site's food rule.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

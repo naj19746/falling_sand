@@ -831,7 +831,10 @@ streams don't pour right on top of them.
 
 **Final values:** `wheat_per_pour` 3, `critter_starve_minutes` 40,
 `WELL_MAX_ROWS` 5, `TOSS_SHARE` 0.75 (of grains actually poured),
-`CATCH_RANGE` 8, `PLANT_RADIUS` 5, `PLANT_SECS` 20 min, `HOME_W` 15.
+`CATCH_RANGE` 24 (capped by what it can reach in time), `SPRINT` 2,
+`PLANT_RADIUS` 5, `PLANT_SECS` 20 min, wells 7-21 wide (`WELL_MIN_W`,
+`WELL_MAX_W`), so a home is 15-29 wide. Rain on hut and well roofs runs
+into the well (gutters).
 
 **Measured:** a farm alone holds the fill 24.0 min. Twelve charged large
 tossers hold it 84 min, and it always ends by overfill, not the stall

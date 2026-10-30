@@ -183,6 +183,10 @@ void critters_refill(Sim *s);
 /* sim.c: a drop soaked into the dirt at (cx, cy), dry or already wet. */
 void soak(Sim *s, int cx, int cy, int dry);
 
+/* critter.c: rain landing at (x, y) on a hut's or well's roof runs into
+ * the well. Returns whether it took the drop. */
+int gutter(Sim *s, int x, int y);
+
 /* critter.c: a bolt just struck (s->bolt); critters near it get charged. */
 void charge_critters(Sim *s);
 

@@ -74,7 +74,8 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
 - Wheat's `since[]` is in sim seconds (`frame / steps_per_sec`), not the
   wall clock: it rots on sim time. `set_cell()` handles that.
 - Only a pour in critter.c makes or grows wheat; nothing in sim.c's water
-  code knows about it.
+  code knows about it. The one water hook into critter.c is `gutter()`:
+  rain landing on a built home roof moves into that home's well.
 - Every critter timing goes through `csecs()` (supercharge) except
   falling.
 

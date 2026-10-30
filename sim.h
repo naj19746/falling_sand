@@ -171,15 +171,17 @@ typedef struct {
     uint16_t cell;          /* what was thrown, for its color */
 } Toss;
 
-/* A colony's home: a hut and a well side by side on level ground, 15
- * cells wide, with x its left edge and y the row of both floors. The
- * critters build them cell by cell from the plan in critter.c. */
+/* A colony's home: a hut and a well side by side on level ground, with
+ * x its left edge and y the row of both floors. The well is as wide as
+ * the ground allows when the home is planned. The critters build them
+ * cell by cell from the plan in critter.c. */
 #define MAX_HOMES 8
 typedef struct {
     int used;
     int x, y;
     int dir;                /* side the well is on: -1 left, 1 right */
     int rows;               /* well interior rows */
+    int ww;                 /* well width, walls included; odd */
     int wx0, wy0, wx1, wy1; /* well interior, inclusive: water never dries there */
 } Home;
 
@@ -276,6 +278,7 @@ typedef struct {
     long soaks;             /* water poured on dirt */
     long planted;           /* seeds critters planted */
     long caught;            /* drops critters caught */
+    long guttered;          /* drops run off roofs into wells */
     int critters;           /* slots in use */
 } Sim;
 

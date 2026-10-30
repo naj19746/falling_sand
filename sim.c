@@ -806,8 +806,12 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
     }
 
     int below = CELL_TYPE(next[x]);
-    if (below != EMPTY)
+    if (below != EMPTY) {
+        int fresh = CELL_COLOR(row[x]) & RAIN_FRESH;
         land(s, &row[x], x, y);
+        if (fresh && s->critters && gutter(s, x, y))
+            return;
+    }
 
     /* A tree lets drops through its canopy and trunk; its roots drink. */
     if (below == LEAF || below == WOOD) {

@@ -136,9 +136,11 @@ more sand. They live off the land:
   food. Only critters do this; rain never makes wheat. With no earth
   around, a critter plants a seed it carries, and pours water on dirt to
   grow moss the way rain does.
-- **Water:** sand swallows raindrops at once, so critters run under falling
-  drops to catch them, carry puddle water, and keep it in a covered well,
-  where it never dries up.
+- **Water:** sand swallows raindrops at once, so critters sprint under
+  falling drops to catch them, carry puddle water, and keep it in a
+  covered well, where it never dries up. Rain on a hut's or well's roof
+  runs down a gutter into the well, so wells are built as wide as the
+  ground allows.
 - **Building:** they mine stone and iron and build a hut (a roof over a
   floor) and a well on level ground near food. Iron comes only from
   lightning, so from git commits. An all-iron hut keeps its critters, and
