@@ -1,0 +1,4 @@
+# sandbg: let the logged-in desktop user open Keychron hidraw devices, so it
+# can drive the per-key LEDs through the keyboard's raw HID interface.
+# Installed by sandbg-setup; removed with sandbg-setup --undo.
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="3434", TAG+="uaccess"

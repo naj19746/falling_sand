@@ -20,6 +20,10 @@ over. A few things outside the sandbox feed into it:
   drain: it and the dirt, moss or trees touching it stay, while the rest
   of the pile sifts through. Now and then some or all of it rusts back to
   stone.
+- **Keyboard:** on a Keychron Q4 running the sandbg keymap, the per-key
+  LEDs mirror the sandbox: piles glow amber and brighten as they grow,
+  drizzle flashes single keys while steady rain glows across the board,
+  moss grows as green spots, and lightning flashes the board.
 
 It costs well under 1% of a CPU core when it's idle, and it pauses while a
 maximized or fullscreen window covers the desktop.
@@ -30,6 +34,8 @@ maximized or fullscreen window covers the desktop.
   may work with `--wid` and [xwinwrap](https://github.com/ujjwal96/xwinwrap).
 - SDL2, Xlib with Xext, PulseAudio (or PipeWire's Pulse server), D-Bus,
   and `curl`.
+- Optional: a Keychron Q4 for the per-key LEDs; see
+  [Keyboard LEDs](#keyboard-leds).
 
 On Debian or Ubuntu:
 
@@ -51,6 +57,10 @@ entry, starts `sandbg`, and installs a global git hook for the lightning.
 The hook passes through to each repo's own hooks. If you already have a
 global `core.hooksPath`, it leaves that alone and prints the one line to
 add to your own `post-commit` hook.
+
+It also installs a udev rule (with `sudo`) that lets your user open the
+Keychron's raw HID interface. That rule is only needed for the keyboard
+LEDs; skip it and everything else still works.
 
 To undo all of it:
 
@@ -75,6 +85,8 @@ Edit `~/.config/sandbg/config.ini`, then restart with
 | `spotify_seeds` | true | Drop a seed for each song Spotify finishes |
 | `lightning` | true | Strike on each git commit |
 | `fill_reset` | 0.6 | Drain when this fraction of the screen is sand |
+| `keyboard` | auto | Keychron LEDs: `auto`, `off` or `preview` |
+| `keyboard_brightness` | 1.0 | Overall LED brightness, 0-1 |
 
 Any setting can be overridden for a single run with
 `--set key=value`.
@@ -93,9 +105,52 @@ sandbg --weather         # print the current weather and the rain rate it gives
 sandbg --meter           # live audio level, as the blaster sees it
 sandbg --spotify         # what Spotify is playing, and each finished song
 sandbg --strike          # fire one lightning strike at the running copy
+sandbg --keyboard        # show the Keychron LED interface and keymap status
+sandbg --keyboard-preview  # run with the LED colors drawn in the terminal
 sandbg --profile         # print frame timings every 5 seconds
 sandbg --help            # all flags
 ```
+
+## Keyboard LEDs
+
+On a Keychron Q4 (ANSI), sandbg can drive the 61 per-key LEDs. Each key
+samples the part of the screen above it. The board is dark where the
+screen is empty. Sand piles glow amber from the bottom row up, brighter as
+each key's patch fills and as the whole pile grows; falling sand leaves a
+warm streak across the rows. In a drizzle each drop is a sharp blue-white
+flash on the key it's passing; as the rain gets heavier the drops fade into
+a soft blue glow over the whole board. Moss shows as green spots that
+brighten as they grow and spread to the next key once they're large, and a
+lightning strike flashes the whole board. Colors are gamma-corrected for
+the LEDs, so `--keyboard-preview` shows them as they look on the keys.
+
+Stock Keychron firmware speaks VIA, which only exposes whole-keyboard
+effects. Per-key control needs the small keymap in
+[firmware/keychron-q4-sandbg](firmware/keychron-q4-sandbg/README.md), which
+adds a 32-byte raw HID protocol and keeps Keychron's default Q4 layers.
+Build and flash it once with QMK; the keymap README has the exact commands.
+VIA is disabled in that build. When sandbg exits, or stops talking for
+three seconds, the firmware restores the effect, brightness and enabled
+state it found.
+
+The raw HID interface is root-only by default. `sandbg-setup` installs
+this udev rule (with `sudo`) and reloads udev:
+
+```
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="3434", TAG+="uaccess"
+```
+
+Check what sandbg sees with:
+
+```
+sandbg --keyboard                       # is the interface there, and answering?
+sandbg --windowed --keyboard-preview    # draw the LED colors in the terminal
+```
+
+Set `keyboard = off` to leave the keyboard alone. While the desktop is
+covered, sandbg only sends a keepalive once a second; when no keyboard is
+found it doesn't scan the grid at all. The mapping is for the Q4 ANSI;
+other models would need their LED layout added to `keyboard.c`.
 
 ## Privacy
 
@@ -109,3 +164,4 @@ is read over D-Bus, both locally.
   monitor.
 - It doesn't follow resolution changes; restart it after one.
 - Snow falls as water.
+- Keyboard LEDs are mapped for the Keychron Q4 ANSI only.

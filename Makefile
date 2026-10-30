@@ -8,9 +8,9 @@ DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 PREFIX ?= $(HOME)/.local
 
-SRCS = main.c sim.c render.c x11.c audio.c config.c weather.c spotify.c
+SRCS = main.c sim.c render.c x11.c audio.c config.c weather.c spotify.c keyboard.c
 OBJS = $(SRCS:.c=.o)
-HDRS = sim.h render.h x11.h audio.h config.h weather.h spotify.h
+HDRS = sim.h render.h x11.h audio.h config.h weather.h spotify.h keyboard.h
 
 sandbg: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(SDL_LIBS) -lX11 -lXext -lpulse $(DBUS_LIBS) -lm
@@ -28,6 +28,7 @@ install: sandbg
 	install -Dm755 sandbg $(PREFIX)/bin/sandbg
 	install -Dm755 sandbg-setup $(PREFIX)/bin/sandbg-setup
 	install -Dm644 config.ini.example $(PREFIX)/share/sandbg/config.ini.example
+	install -Dm644 70-sandbg-keyboard.rules $(PREFIX)/share/sandbg/70-sandbg-keyboard.rules
 	install -Dm755 git-hook $(PREFIX)/share/sandbg/git-hook
 
 uninstall:

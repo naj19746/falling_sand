@@ -79,3 +79,17 @@ tree_thirst_minutes = 22
 ; Drain anyway, even with trees alive, once the screen is this full
 ; (fill_reset to 0.98).
 drain_overfill = 0.8
+
+; Keyboard LEDs. On a Keychron Q4 running the sandbg QMK keymap (see
+; README.md), each key mirrors the part of the screen above it: piles glow
+; amber and brighten as they grow, drizzle flashes single keys and steady
+; rain glows across the board, moss grows as green spots, and a strike
+; flashes the whole keyboard.
+; auto = find the keyboard; off = leave it alone; preview = draw a colored
+; map in the terminal instead.
+keyboard = auto
+; Overall LED brightness, 0-1.
+keyboard_brightness = 1.0
+; Drive this hidraw device instead of finding the keyboard (e.g. /dev/hidraw1).
+; Empty = look for a Keychron raw HID interface.
+keyboard_device =

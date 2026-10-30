@@ -25,6 +25,9 @@ typedef struct {
     int   tree_minutes;     /* time for a tree to grow fully */
     int   tree_thirst_minutes;  /* minutes without water before a tree dies */
     float drain_overfill;   /* drain anyway, even with trees alive, at this fill */
+    char  keyboard[16];     /* auto, off or preview */
+    char  keyboard_device[64];  /* "" = find the Keychron raw HID interface */
+    float keyboard_brightness;  /* 0-1 */
 } Config;
 
 void config_defaults(Config *c);

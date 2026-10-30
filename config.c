@@ -35,6 +35,9 @@ void config_defaults(Config *c)
     c->tree_minutes = 30;
     c->tree_thirst_minutes = 22;
     c->drain_overfill = 0.8f;
+    snprintf(c->keyboard, sizeof c->keyboard, "auto");
+    c->keyboard_device[0] = '\0';
+    c->keyboard_brightness = 1.0f;
 }
 
 const char *config_default_path(void)
@@ -116,6 +119,19 @@ int config_set(Config *c, const char *key, const char *value)
     if (!strcmp(key, "tree_minutes"))    return parse_int(value, &c->tree_minutes);
     if (!strcmp(key, "tree_thirst_minutes")) return parse_int(value, &c->tree_thirst_minutes);
     if (!strcmp(key, "drain_overfill"))  return parse_float(value, &c->drain_overfill);
+    if (!strcmp(key, "keyboard_brightness")) return parse_float(value, &c->keyboard_brightness);
+    if (!strcmp(key, "keyboard")) {
+        if (strlen(value) >= sizeof c->keyboard)
+            return -1;
+        strcpy(c->keyboard, value);
+        return 0;
+    }
+    if (!strcmp(key, "keyboard_device")) {
+        if (strlen(value) >= sizeof c->keyboard_device)
+            return -1;
+        strcpy(c->keyboard_device, value);
+        return 0;
+    }
     if (!strcmp(key, "palette")) {
         if (strlen(value) >= sizeof c->palette)
             return -1;
@@ -218,6 +234,11 @@ const char *config_validate(const Config *c)
         return "tree_thirst_minutes must be 1-240";
     if (c->drain_overfill < c->fill_reset || c->drain_overfill > 0.98f)
         return "drain_overfill must be from fill_reset to 0.98";
+    if (strcmp(c->keyboard, "auto") && strcmp(c->keyboard, "off") &&
+        strcmp(c->keyboard, "preview"))
+        return "keyboard must be auto, off or preview";
+    if (!(c->keyboard_brightness >= 0.0f && c->keyboard_brightness <= 1.0f))
+        return "keyboard_brightness must be 0-1";
     if (!ok) {
         snprintf(msg, sizeof msg, "unknown palette '%s' (desert, pastel, neon, mono)",
                  c->palette);

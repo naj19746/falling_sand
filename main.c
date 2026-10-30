@@ -11,6 +11,7 @@
 
 #include "audio.h"
 #include "config.h"
+#include "keyboard.h"
 #include "render.h"
 #include "sim.h"
 #include "spotify.h"
@@ -84,6 +85,8 @@ static void usage(const char *prog)
            "  --weather         print current weather and the rain it gives, then exit\n"
            "  --spotify         show what Spotify is playing and each finished song\n"
            "  --strike          make the running sandbg fire a bolt of lightning\n"
+           "  --keyboard        show the Keychron LEDs and whether the keymap is loaded\n"
+           "  --keyboard-preview  draw a colored keyboard map in the terminal\n"
            "\n"
            "mouse: left-drag = sand, right-drag = stone, middle-drag = erase\n"
            "keys:  r = reset, d = drain now, s = drop a seed, l = lightning,\n"
@@ -197,7 +200,7 @@ int main(int argc, char **argv)
 {
     int mode = MODE_DESKTOP;
     unsigned long wid = 0;
-    int profile = 0, show_weather = 0;
+    int profile = 0, show_weather = 0, show_keyboard = 0;
     Config cfg;
     config_defaults(&cfg);
 
@@ -245,6 +248,10 @@ int main(int argc, char **argv)
             return run_meter(cfg.audio_sink);
         } else if (strcmp(arg, "--strike") == 0) {
             return send_strike();
+        } else if (strcmp(arg, "--keyboard") == 0) {
+            show_keyboard = 1;
+        } else if (strcmp(arg, "--keyboard-preview") == 0) {
+            r = config_set(&cfg, "keyboard", "preview");
         } else if (strcmp(arg, "--spotify") == 0) {
             return spotify_watch();
         } else if (strcmp(arg, "--windowed") == 0) {
@@ -282,6 +289,8 @@ int main(int argc, char **argv)
 
     if (show_weather)
         return run_weather(&cfg);
+    if (show_keyboard)
+        return keyboard_probe(cfg.keyboard_device);
 
     if (mode == MODE_DESKTOP && take_desktop_lock() != 0) {
         fprintf(stderr, "sandbg is already running on the desktop\n");
@@ -323,6 +332,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "init failed: %s\n", SDL_GetError());
         return 1;
     }
+
+    Keyboard kb;
+    if (keyboard_init(&kb, sim.w, sim.h, cfg.keyboard, cfg.keyboard_device,
+                      cfg.keyboard_brightness) != 0)
+        fprintf(stderr, "keyboard: can't build the LED map (continuing without)\n");
+
     sim.fill_reset = cfg.fill_reset;
     sim.seed_radius = cfg.seed_radius;
     sim.slip = (uint32_t)(cfg.slipperiness * 1024);
@@ -439,6 +454,7 @@ int main(int argc, char **argv)
 
         if (covered) {
             /* Nothing visible: skip the work, keep handling events. */
+            keyboard_hold(&kb, &sim, (uint32_t)start);
             prof_covered++;
             SDL_Delay(COVERED_CHECK_MS / 5);
             continue;
@@ -468,6 +484,7 @@ int main(int argc, char **argv)
         Uint64 t1 = SDL_GetPerformanceCounter();
         if (profile)
             prof_awake += sim_awake_chunks(&sim);
+        keyboard_update(&kb, &sim, (uint32_t)SDL_GetTicks64());
         render_draw(&ren, &sim);
         Uint64 t2 = SDL_GetPerformanceCounter();
 
@@ -496,6 +513,7 @@ int main(int argc, char **argv)
     }
 
     render_free(&ren);
+    keyboard_free(&kb);
     sim_free(&sim);
     SDL_DestroyWindow(win);
     SDL_Quit();

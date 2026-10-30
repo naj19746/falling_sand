@@ -32,6 +32,8 @@ audio.c/.h  PulseAudio loudness of the output (background thread)
 weather.c/.h  Open-Meteo via curl → drops per minute (background thread)
 spotify.c/.h  Spotify over D-Bus MPRIS → count of songs finished (background thread)
 config.c/.h ini parsing, defaults, validation
+keyboard.c/.h  Keychron Q4 per-key LEDs: screen -> keys, raw HID protocol
+firmware/keychron-q4-sandbg/  the QMK keymap the keyboard needs for per-key control
 sandbg-setup  install/undo script; git-hook  the global hook dispatcher it installs
 ```
 
@@ -79,6 +81,12 @@ Then look at it with `make run`. For the external inputs, use
 `--set rain_override=<drops/min>` for rain, the `s` and `l` keys for seeds
 and lightning, and `--meter`, `--weather` and `--spotify` to check what
 sandbg sees.
+
+For the keyboard, `--keyboard-preview` draws the computed LED colors in the
+terminal (it needs no hardware), and `--keyboard` checks whether the
+Keychron's raw HID interface is visible and running the sandbg keymap. The
+LED order and key geometry are in `keyboard.c`; the firmware protocol is
+documented in `firmware/keychron-q4-sandbg/README.md`.
 
 ## Style
 
