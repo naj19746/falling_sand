@@ -80,10 +80,12 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
     s->iron   += (new == IRON) - (old == IRON);
     s->wheat  += (new == WHEAT) - (old == WHEAT);
     s->bodies += (new == BODY) - (old == BODY);
+    s->bricks += IS_SAND_BRICK(v) - IS_SAND_BRICK(*cell);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
-    /* Wheat rots by sim time, the rest by the wall clock. */
-    if (new == WHEAT)
+    /* Wheat rots and sand bricks crumble by sim time, the rest by the
+     * wall clock. */
+    if (new == WHEAT || IS_SAND_BRICK(v))
         s->since[idx] = s->frame / (uint32_t)s->steps_per_sec;
     else if (DAMP(new) || new == BODY)
         s->since[idx] = s->clock;

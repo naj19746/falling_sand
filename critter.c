@@ -315,6 +315,15 @@ static int drop_behind(Sim *s, Critter *c, int d, uint16_t v)
  * one-cell step. Blocked by loose stuff, it digs out the top cell in the
  * way and throws it over its shoulder instead. Returns 1 if it moved or
  * dug. */
+/* Carried stone or iron as laid in a building: built, and stone never
+ * as sand brick. */
+static uint16_t laid(uint16_t carry)
+{
+    if (CELL_TYPE(carry) == STONE)
+        carry &= ~(SAND_BRICK << 8);
+    return carry | (BUILT << 8);
+}
+
 static int built(uint16_t v)
 {
     int t = CELL_TYPE(v);
@@ -1493,7 +1502,7 @@ static void build(Sim *s, int i)
     }
     if (s->frame < c->work_until)
         return;
-    set_cell(s, c->tx, c->ty, c->carry | (BUILT << 8));
+    set_cell(s, c->tx, c->ty, laid(c->carry));
     c->carry = 0;
     c->fails = 0;
     s->laid++;
@@ -1643,7 +1652,9 @@ static void go_patch(Sim *s, int i)
     }
     int bx = col + d * (next < 0 ? 0 : next), by = top + (next < 0 ? 0 : next);
     if (next >= 0 && c->carry && in_reach(c, bx, by) && CELL_TYPE(at(s, bx, by)) == EMPTY) {
-        set_cell(s, bx, by, CELL(STONE, (CELL_COLOR(c->carry) & 0x7F) | BUILT));
+        /* Sand pressed into brick crumbles in time; dirt brick lasts. */
+        int sand = CELL_TYPE(c->carry) == SAND;
+        set_cell(s, bx, by, CELL(STONE, (CELL_COLOR(c->carry) & 0x3F) | BUILT | (sand ? SAND_BRICK : 0)));
         c->carry = 0;
         c->work_until = s->frame + csecs(s, c, STACK_SECS);
         s->stacked++;
@@ -1882,7 +1893,7 @@ static void swap_in(Sim *s, int i)
     }
     if (s->frame < c->work_until)
         return;
-    set_cell(s, sx, sy, c->carry | (BUILT << 8));
+    set_cell(s, sx, sy, laid(c->carry));
     c->carry = CELL(STONE, CELL_COLOR(v) & ~BUILT);
     drop_carry(s, c);
     s->laid++;

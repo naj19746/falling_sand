@@ -23,6 +23,10 @@
 /* Wheat nobody has poured on loses a level this often, in sim time. */
 #define WHEAT_ROT_SECS (3 * 3600)
 
+/* A brick a critter pressed from sand crumbles back after this long, in
+ * sim time. */
+#define SAND_BRICK_SECS (20 * 60)
+
 /* A dead critter's body rots into dirt after this long. */
 #define BODY_ROT_SECS (30 * 60)
 
@@ -153,8 +157,8 @@ static uint32_t rain_near(Sim *s, int x, int y)
 }
 
 /* Visit every SWEEP_ROWS-th row, a different set each step, drying out
- * wet dirt and moss whose time is up and rotting bodies into dirt. Works
- * on sleeping chunks too. */
+ * wet dirt and moss whose time is up, rotting bodies into dirt and
+ * crumbling sand bricks. Works on sleeping chunks too. */
 static void age_damp(Sim *s)
 {
     uint32_t now = s->frame / (uint32_t)s->steps_per_sec;
@@ -184,6 +188,8 @@ static void age_damp(Sim *s)
                 s->rotted += k > 0;
             } else if (t == BODY && s->clock - since[x] >= BODY_ROT_SECS) {
                 set_cell(s, x, y, CELL(DIRT, rnd(s) & 0xFF));
+            } else if (IS_SAND_BRICK(row[x]) && now - since[x] >= SAND_BRICK_SECS) {
+                set_cell(s, x, y, CELL(SAND, grain_color(s)));
             }
         }
     }
@@ -303,7 +309,7 @@ void sim_reset(Sim *s)
     memset(s->cells, 0, (size_t)s->w * s->h * sizeof *s->cells);
     if (s->keep) memset(s->keep, 0, (size_t)s->w * s->h);
     s->grains = s->solids = s->water = s->damp = s->glass = s->iron = 0;
-    s->wheat = s->bodies = 0;
+    s->wheat = s->bodies = s->bricks = 0;
     s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;
@@ -1427,7 +1433,7 @@ void sim_step(Sim *s)
         evaporate(s);
         drain_floor(s);
     }
-    if (s->damp || s->bodies)
+    if (s->damp || s->bodies || s->bricks)
         age_damp(s);
     if (s->glass)
         load_glass(s);
@@ -1493,7 +1499,7 @@ void sim_paint(Sim *s, int cx, int cy, int radius, int type)
                 if (CELL_TYPE(cell) == EMPTY && (rnd(s) & 3) == 0)
                     set_cell(s, x, y, CELL(SAND, grain_color(s)));
             } else if (CELL_TYPE(cell) != type) {
-                set_cell(s, x, y, CELL(type, rnd(s) & 0x7F));
+                set_cell(s, x, y, CELL(type, rnd(s) & (type == IRON ? 0x3F : 0x7F)));
             }
         }
     }
@@ -1664,7 +1670,7 @@ int sim_strike(Sim *s)
             else if (t == DIRT || t == WET_DIRT)
                 set_cell(s, x, y, CELL(STONE, rnd(s) & 0x7F));
             else if (t == STONE)     /* a stone hut stays the critters' */
-                set_cell(s, x, y, CELL(IRON, (rnd(s) & 0x7F) | (CELL_COLOR(c) & BUILT)));
+                set_cell(s, x, y, CELL(IRON, (rnd(s) & 0x3F) | (CELL_COLOR(c) & BUILT)));
         }
     }
     return 0;

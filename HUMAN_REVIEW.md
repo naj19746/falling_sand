@@ -450,6 +450,31 @@ live past the day they arrived, and patches turn to wheat that farms
 hold the fill with. Critters spend about 45% of their time building
 (mostly stairs).
 
+### Follow-up: sand bricks crumble
+
+Asked for: sand bricks crumble back into sand over 20 minutes, while dirt
+bricks last until they're drained.
+
+- A step pressed from sand gets a `SAND_BRICK` bit. 20 minutes of sim
+  time after it's laid, it turns back into a grain of sand. Brick from
+  dirt (and from debris or stone) has no bit, and lasts until the drain
+  crumbles it like other built stone.
+- The aging sweep only ran while there was damp earth or a body
+  somewhere. `set_cell()` now keeps a running count of sand bricks so it
+  runs for them too; the harness recount checks that count.
+- A fix along the way: lightning (and painting) could make iron whose
+  random color had the `SEEDED` bit, so it would never rust. Iron from
+  them now keeps that bit clear, and stone laid in a home never gets
+  `SAND_BRICK`.
+- t18: a sand brick and a dirt brick both stand at 19 minutes. At 21
+  minutes the sand bricks are 10 grains of sand and the dirt bricks
+  still stand. A critter's 35-step stairs are all sand again 21 minutes
+  after it reaches its patch.
+
+The matrix is about the same as before (8 seeds x 3 days): typical 3/8
+runs alive at the end, mean life 1.6 h; showers 0/8, 1.7 h; nocommit
+2/8, 2.3 h; starve240 8/8, 7.8 h.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

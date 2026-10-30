@@ -149,7 +149,9 @@ more sand. They live off the land:
   turning a short stretch of it to iron that never rusts, with dirt on
   top, and a short shower falls there to grow moss on it. Critters stay
   near their patch; stranded below its floating ledge, they build brick
-  stairs up to it out of sand. Otherwise iron comes only from
+  stairs up to it out of sand, which crumble back into sand after about
+  20 minutes. Brick pressed from dirt lasts until the drain. Otherwise
+  iron comes only from
   lightning, so from git commits. An all-iron hut keeps its critters, and
   the field and well water joined to it, through the drain; everyone else
   walks off the screen and comes back at the next fill.

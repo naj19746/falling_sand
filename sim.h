@@ -37,8 +37,16 @@ enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT, CRITTER,
  * buildings. Everything else that makes stone or iron clears it. */
 #define BUILT             0x80
 
-/* Color bit on iron a critter grew from a seed: it never rusts. */
+/* Color bit on iron a critter grew from a seed: it never rusts. Iron
+ * from anywhere else keeps it clear. */
 #define SEEDED            0x40
+
+/* Color bit on built stone a critter pressed from sand (the steps of its
+ * stairs): it crumbles back to sand after a while. Brick from dirt and
+ * stone laid for homes keep it clear and last until the drain. */
+#define SAND_BRICK        0x40
+#define IS_SAND_BRICK(c)  (CELL_TYPE(c) == STONE && \
+                           (CELL_COLOR(c) & (BUILT | SAND_BRICK)) == (BUILT | SAND_BRICK))
 
 /* A wheat cell's color byte: the low bits are how much eating is left in
  * it, 0 to WHEAT_MAX. */
@@ -249,6 +257,7 @@ typedef struct {
     int iron;               /* iron cells, running total */
     int wheat;              /* wheat cells, running total */
     int bodies;             /* body cells, running total */
+    int bricks;             /* sand bricks, running total */
     uint8_t *keep;          /* per cell: kept through the drain */
     int *stack;             /* flood-fill scratch, w*h ints */
     int kept_grains;        /* kept dirt/moss, counted in grains too */

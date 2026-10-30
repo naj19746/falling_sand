@@ -79,7 +79,11 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
 - Iron a critter makes from a seed is `BUILT | SEEDED` iron outside any
   home's plan: nobody mines it, and `rust_iron()` skips `SEEDED` cells.
   Stairs critters build up to their patch are `BUILT` stone outside any
-  plan too; they crumble at the drain like other stone.
+  plan too. Steps pressed from sand also carry `SAND_BRICK` and turn back
+  into sand `SAND_BRICK_SECS` (sim time) after they're laid; `set_cell()`
+  keeps the `bricks` total that wakes `age_damp()` for them. Everything
+  else built lasts until the drain. Iron outside a seed's patch never has
+  the `SEEDED` bit, and stone laid in a home never has `SAND_BRICK`.
 - Every critter timing goes through `csecs()` (supercharge) except
   falling.
 
