@@ -588,6 +588,8 @@ static void evaporate(Sim *s)
         int x = idx % s->w, y = idx / s->w;
         if (y > 0 && CELL_TYPE(s->cells[idx - s->w]) != EMPTY)
             continue;
+        if (in_well(s, x, y))
+            continue;
         if ((rnd(s) & 1023) < chance)
             set_cell(s, x, y, CELL(EMPTY, 0));
     }

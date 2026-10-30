@@ -149,6 +149,7 @@ typedef struct {
     int avoid_x, avoid_y;   /* a spot it gave up on, */
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
+    uint8_t climbing;       /* clinging to the wall it faces */
     int home;               /* index into s->home[], or -1 */
     int ax;                 /* where it strolls around: home, or its food */
     uint32_t buried_steps;  /* steps spent buried */
@@ -157,6 +158,18 @@ typedef struct {
     uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
     uint32_t dig_at;        /* sim frame it can next dig up */
 } Critter;
+
+/* A colony's home: a hut and a well side by side on level ground, 13
+ * cells wide, with x its left edge and y the row of both floors. The
+ * critters build them cell by cell from the plan in critter.c. */
+#define MAX_HOMES 8
+typedef struct {
+    int used;
+    int x, y;
+    int dir;                /* side the well is on: -1 left, 1 right */
+    int rows;               /* well interior rows */
+    int wx0, wy0, wx1, wy1; /* well interior, inclusive: water never dries there */
+} Home;
 
 enum { PHASE_FILL, PHASE_DRAIN };
 
@@ -238,8 +251,10 @@ typedef struct {
     int starve_minutes;     /* sim minutes from full to starving */
     int wheat_per_pour;     /* stock levels one pour adds */
     Critter crit[MAX_CRITTERS];
+    Home home[MAX_HOMES];
     /* Farming counts, for checking that only pours make wheat. */
     long pours, pour_converted, pour_levels, bites, rotted;
+    long stocked, laid;     /* water into wells, cells built */
     int critters;           /* slots in use */
 } Sim;
 

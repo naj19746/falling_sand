@@ -82,7 +82,10 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
     s->bodies += (new == BODY) - (old == BODY);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
-    if (DAMP(new) || new == BODY)
+    /* Wheat rots by sim time, the rest by the wall clock. */
+    if (new == WHEAT)
+        s->since[idx] = s->frame / (uint32_t)s->steps_per_sec;
+    else if (DAMP(new) || new == BODY)
         s->since[idx] = s->clock;
     *cell = v;
     /* The kept mask follows the type: a kept cell that turns into
@@ -141,6 +144,17 @@ static inline int sand_can_enter(uint16_t c)
     return t == EMPTY || (t == WATER && !(CELL_COLOR(c) & SEEPING));
 }
 
+
+/* Inside one of the critters' wells, where water never dries up. */
+static inline int in_well(const Sim *s, int x, int y)
+{
+    for (int k = 0; k < MAX_HOMES; k++) {
+        const Home *h = &s->home[k];
+        if (h->used && x >= h->wx0 && x <= h->wx1 && y >= h->wy0 && y <= h->wy1)
+            return 1;
+    }
+    return 0;
+}
 
 /* critter.c: a bolt just struck (s->bolt); critters near it get charged. */
 void charge_critters(Sim *s);
