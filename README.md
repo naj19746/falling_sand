@@ -141,8 +141,10 @@ more sand. They live off the land:
   covered well, where it never dries up. Rain on a hut's or well's roof
   runs down a gutter into the well, so wells are built as wide as the
   ground allows.
-- **Building:** they mine stone and iron and build a hut (a roof over a
-  floor) and a well on level ground near food. Iron comes only from
+- **Building:** they mine stone and iron, or press bare dirt into brick,
+  and build a well on level ground, near food if they can, then a hut (a
+  roof over a floor) beside it. New critters drop in over stone or iron
+  when there is some. Iron comes only from
   lightning, so from git commits. An all-iron hut keeps its critters, and
   the field and well water joined to it, through the drain; everyone else
   walks off the screen and comes back at the next fill.

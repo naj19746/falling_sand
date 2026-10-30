@@ -279,6 +279,54 @@ nothing stays put long enough to farm.
 `git revert` of this commit takes both changes back out if you don't
 want them.
 
+### Follow-up: cheaper homes, brick, dropping in over stone
+
+Asked for next: do homes take too much stone? Try something minimal at
+first, dirt as brick, and new critters dropping in over stone or iron.
+
+**Stone wasn't what stopped them.** I instrumented site choice over four
+realistic 8-hour days. A homeless critter had a level, unblocked 15-wide
+spot within reach about a third of the time. There was moss within 20 of
+it 0% of the time, and any moss anywhere on screen under 1% of the time.
+A site needed food nearby, so no home was ever planned.
+
+Changes:
+- **Food is a bonus at a site** (`FOOD_BONUS` 40 cells of distance), not
+  a requirement.
+- **The well comes first;** the hut only joins the plan once the well is
+  built.
+- **Brick:** bare dry dirt open to the sky (never dirt under moss) is
+  building material, laid as built stone. Stone and debris are still
+  preferred.
+- **Dropping in, in this order:** over stone or iron with earth within
+  20 columns, then over earth, then over stone or iron.
+- Two old navigation traps the new drop spots exposed:
+  - A hungry critter eats anything in reach before going after better
+    food it can't reach. A small one sunk in a field had starved going
+    back and forth between two wheat patches with moss beside it.
+  - Digging in place while walking now counts as stuck after
+    `DIG_IN_PLACE` digs. One critter had dug forever at sand sliding back
+    into its pit.
+
+**Realistic matrix (same 8 seeds x 3 days): homes are now planned in
+every run, but almost nothing gets built and survival doesn't change.**
+Critters spend 15-22% of their time building and lay 0-12 cells a day
+(12-26 with starve240). typical and showers: 0/8 alive, mean life
+0.9-1.0 h. starve240: 6/8, 5.1-6.6 h. No food eaten.
+
+A trace shows why. Homes get planned on whatever is level when a critter
+lands: a ledge, or the empty floor just after a drain. The pile then
+rises about 15 rows a minute. The builders ride it up, and the plan cells
+fill with sand faster than they can be cleared. Whatever gets built
+crumbles at the drain about every 9 minutes. The fill cycle is the
+limit, not stone.
+
+**Known regression:** t9 (a colony building a home from stone on a
+field strewn with rocks) now fails. The two critters drop in on
+different rocks, plan two separate homes, and the large one's 21-wide
+well on loose sand gets 10 of 55 cells in 4 hours. It passed before this
+change.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

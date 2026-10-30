@@ -150,6 +150,7 @@ typedef struct {
     int avoid_x, avoid_y;   /* a spot it gave up on, */
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
+    uint8_t dug;            /* digs in place while walking */
     uint8_t climbing;       /* clinging to the wall it faces */
     uint8_t thirsty;        /* has a use for water: catches rain */
     int home;               /* index into s->home[], or -1 */
@@ -182,6 +183,7 @@ typedef struct {
     int dir;                /* side the well is on: -1 left, 1 right */
     int rows;               /* well interior rows */
     int ww;                 /* well width, walls included; odd */
+    int hut;                /* the hut is in the plan: the well's done */
     int wx0, wy0, wx1, wy1; /* well interior, inclusive: water never dries there */
 } Home;
 

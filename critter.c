@@ -26,9 +26,11 @@
 #define CHARGE_SPEEDUP 3
 
 /* Moves without getting closer before a critter gives up on its goal,
- * and how long it then leaves that spot alone. */
+ * and how long it then leaves that spot alone. Digging in place while
+ * walking counts as a move that went nowhere after DIG_IN_PLACE digs. */
 #define STUCK_MOVES 6
 #define AVOID_SECS  30.0f
+#define DIG_IN_PLACE (4 * STUCK_MOVES)
 #define FAILS_BEFORE_DETOUR 3
 #define DETOUR      10
 
@@ -94,6 +96,7 @@
 #define TOSS_SECS   0.75f
 #define TOSS_SHARE  0.75f
 #define EDGE_BONUS  20
+#define FOOD_BONUS  SENSE
 
 /* Farms are counted about once a second. */
 #define FARM_COUNT_SECS 1.0f
@@ -462,6 +465,7 @@ static void set_goal(Sim *s, Critter *c, int goal, int tx, int ty)
     c->tx = tx;
     c->ty = ty;
     c->stuck = 0;
+    c->dug = 0;
     c->best = goal == G_DUMP ? 0 : dist(c, tx, ty);
     c->work_until = 0;
     c->state = CR_WALK;
@@ -547,6 +551,25 @@ typedef int (*Rank)(const Sim *s, int x, int y);
 
 /* The best-ranked exposed cell within SENSE, the nearest of equals.
  * Returns 0 if none. */
+/* The best-ranked cell it can reach from where it stands, if any. */
+static int in_reach_best(Sim *s, int i, Rank rank, int *fx, int *fy)
+{
+    Critter *c = &s->crit[i];
+    int best = 1 << 30;
+    for (int y = c->y - c->h; y <= c->y + 1; y++)
+        for (int x = c->x - 1; x <= c->x + c->w; x++) {
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h)
+                continue;
+            int r = rank(s, x, y);
+            if (r < 0 || r >= best || !exposed(s, i, x, y))
+                continue;
+            best = r;
+            *fx = x;
+            *fy = y;
+        }
+    return best < (1 << 30);
+}
+
 static int find_best(Sim *s, int i, Rank rank, int *fx, int *fy)
 {
     Critter *c = &s->crit[i];
@@ -678,7 +701,8 @@ static int well_top(const Home *h)
 }
 
 /* The plan: a well (7 wide at the least) with a one-cell mouth in the
- * middle of its roof, and a 5x5 hut beside it.
+ * middle of its roof, and a 5x5 hut beside it, which joins the plan once
+ * the well is built.
  *
  *     hut      well
  *    #####    ###.###
@@ -703,7 +727,7 @@ static int plan_at(const Home *h, int x, int y)
         return cx == 0 || cx == h->ww - 1 ? P_WALL : P_WATER;
     }
     int hx = hut_x(h);
-    if (x >= hx && x < hx + HUT_W && y >= f - 4 && y <= f)
+    if (h->hut && x >= hx && x < hx + HUT_W && y >= f - 4 && y <= f)
         return y == f || y == f - 4 ? P_WALL : P_OPEN;
     return P_NONE;
 }
@@ -976,6 +1000,10 @@ static int rank_stone(const Sim *s, int x, int y)
     int t = CELL_TYPE(v);
     if ((t == STONE && !(CELL_COLOR(v) & BUILT)) || t == DEBRIS)
         return near_home(s, x, y) ? -1 : 1;
+    /* Bare dry dirt pressed into brick, when there's no stone. Not dirt
+     * under moss: that's a field. */
+    if (t == DIRT && open_above(s, x, y))
+        return near_home(s, x, y) ? -1 : 2;
     return -1;
 }
 
@@ -1095,8 +1123,8 @@ static int residents(const Sim *s, int k, float *eat_per_hour)
 
 /* A spot for a new home with a well ww wide near critter c: within
  * SENSE, the ground level to within a cell over all its columns, room
- * above it for the tallest well, food within SENSE, and clear of other
- * homes. Nearer is better. */
+ * above it for the tallest well, and clear of other homes. Nearer is
+ * better, and food within SENSE / 2 counts for FOOD_BONUS cells. */
 static int find_site_w(Sim *s, int i, int ww, Home *out)
 {
     Critter *c = &s->crit[i];
@@ -1135,15 +1163,17 @@ static int find_site_w(Sim *s, int i, int ww, Home *out)
         int d = abs(x0 + hw / 2 - c->x) + abs(f - c->y);
         if (x0 < TOSS_RANGE || x0 + hw > s->w - TOSS_RANGE)
             d -= EDGE_BONUS;
-        if (d >= best)
+        if (d - FOOD_BONUS >= best)
             continue;
-        /* Food near the middle of it. */
+        /* Food near the middle of it makes it better. */
         int food = 0;
         for (int y = f - SENSE / 2; y <= f + SENSE / 2 && !food; y++)
             for (int x = x0 - SENSE / 2; x <= x0 + hw + SENSE / 2 && !food; x++)
                 food = x >= 0 && x < s->w && y >= 0 && y < s->h &&
                        MOSSY(CELL_TYPE(at(s, x, y)));
-        if (!food)
+        if (food)
+            d -= FOOD_BONUS;
+        if (d >= best)
             continue;
         best = d;
         memset(out, 0, sizeof *out);
@@ -1403,7 +1433,7 @@ static void build(Sim *s, int i)
     int t = CELL_TYPE(v);
     c->state = CR_MINE;
     if (!c->carry) {
-        int ok = (t == STONE || t == IRON) ? !(CELL_COLOR(v) & BUILT) : t == DEBRIS;
+        int ok = (t == STONE || t == IRON) ? !(CELL_COLOR(v) & BUILT) : t == DEBRIS || t == DIRT;
         if (!ok) {
             end_goal(s, c);
             return;
@@ -1415,7 +1445,7 @@ static void build(Sim *s, int i)
         }
         if (s->frame < c->work_until)
             return;
-        /* Fallen debris is laid as stone. */
+        /* Fallen debris is laid as stone, and dirt as brick. */
         c->carry = CELL(t == IRON ? IRON : STONE, CELL_COLOR(v) & ~BUILT);
         set_cell(s, c->tx, c->ty, CELL(EMPTY, 0));
         end_goal(s, c);             /* think() picks where it goes */
@@ -1797,7 +1827,9 @@ static void think(Sim *s, int i)
     /* Eating comes first, even with its hands full. */
     int hungry = c->food < EAT_BELOW || (c->eating && c->food < FULL_ABOVE);
     c->eating = (uint8_t)hungry;
-    if (hungry && (find_best(s, i, rank_food, &fx, &fy) || find_far(s, i, rank_food, &fx, &fy))) {
+    /* Anything it can reach goes before better food it can't. */
+    if (hungry && (in_reach_best(s, i, rank_food, &fx, &fy) ||
+                   find_best(s, i, rank_food, &fx, &fy) || find_far(s, i, rank_food, &fx, &fy))) {
         set_goal(s, c, G_EAT, fx, fy);
         return;
     }
@@ -1828,6 +1860,8 @@ static void think(Sim *s, int i)
     /* Keep the field stocked: puddles first, then the well. */
     int px, py, puddle = find_best(s, i, rank_water, &fx, &fy);
     int well_done = h && part_done(s, h, 1);
+    if (well_done)
+        h->hut = 1;                 /* the well first, then the hut */
     c->thirsty = (uint8_t)((field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) ||
                            (well_done && (well_water(s, h, &room), room > 0)));
     if (field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) {
@@ -2092,15 +2126,25 @@ static void critter_tick(Sim *s, int i)
     switch (c->goal) {
     case G_CATCH:
     case G_WANDER:
-    case G_DETOUR:
-        if (c->x == c->tx || !step_side(s, i, c->tx < c->x ? -1 : 1)) {
+    case G_DETOUR: {
+        /* Digging counts as a step, but sand can slide back in as fast
+         * as it digs: digging in place too long counts as stuck. */
+        int x0 = c->x, moved = c->x != c->tx && step_side(s, i, c->tx < c->x ? -1 : 1);
+        if (moved && c->x == x0 && ++c->dug >= DIG_IN_PLACE) {
+            c->dug = 0;
+            moved = 0;
+        }
+        if (!moved) {
             if (c->x == c->tx || ++c->stuck >= STUCK_MOVES) {
                 end_goal(s, c);
                 c->work_until = s->frame + csecs(s, c, IDLE_SECS * (0.5f + rndf(s)));
                 c->next_think = s->frame + csecs(s, c, THINK_SECS);
             }
+        } else if (c->x != x0) {
+            c->dug = 0;
         }
         break;
+    }
     case G_EAT:
         if (approach(s, i))
             eat(s, i);
@@ -2352,17 +2396,26 @@ int sim_add_critter(Sim *s, int kind)
     c->h = c->kind == CR_LARGE ? 3 : 2;
     c->y = c->h - 1;
 
-    /* A clear spot along the top, near moss or wheat if there is any. */
-    int best = -1;
-    for (int tries = 0; tries < 64; tries++) {
+    /* A clear spot along the top, best first: over stone or iron to stand
+     * and build on with earth near it, over earth, over stone or iron. */
+    int best = -1, rank = 0;
+    for (int tries = 0; tries < 64 && rank < 3; tries++) {
         int x = (int)(rnd(s) % (uint32_t)(s->w - c->w + 1));
         if (!fits(s, slot, x, c->y))
             continue;
-        if (best < 0)
+        int g = ground_y(s, x), t = g < s->h ? CELL_TYPE(at(s, x, g)) : EMPTY;
+        int rock = t == STONE || t == IRON, earth = 0, r = 0;
+        for (int xx = x - SENSE / 2; xx <= x + SENSE / 2 && !earth; xx++)
+            earth = xx >= 0 && xx < s->w && good_column(s, xx);
+        if (rock && earth)
+            r = 3;
+        else if (good_column(s, x))
+            r = 2;
+        else if (rock)
+            r = 1;
+        if (best < 0 || r > rank) {
             best = x;
-        if (good_column(s, x)) {
-            best = x;
-            break;
+            rank = r;
         }
     }
     if (best < 0) {
