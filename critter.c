@@ -29,6 +29,8 @@
  * and how long it then leaves that spot alone. */
 #define STUCK_MOVES 6
 #define AVOID_SECS  30.0f
+#define FAILS_BEFORE_DETOUR 3
+#define DETOUR      10
 
 /* How far around itself a critter looks for things. */
 #define SENSE       40
@@ -66,20 +68,21 @@
  * one is dumped past it. A well starts WELL_ROWS deep and is deepened up
  * to WELL_MAX_ROWS once the rest is built. */
 #define HOME_RADIUS   12
-#define HOME_W        13
+#define HOME_W        15
 #define WELL_ROWS     2
 #define WELL_MAX_ROWS 5
-
-/* Huts are switched on in the next step. */
-#define HUTS 0
 
 /* Building: mining a cell of stone or iron, and laying one. */
 #define MINE_STONE_SECS 3.0f
 #define MINE_IRON_SECS  4.5f
 #define PLACE_SECS      1.0f
 
+/* Looking for iron anywhere on screen costs a full scan, so a critter
+ * that found none waits this long before looking again. */
+#define IRON_LOOK_SECS 10.0f
+
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP };
+       G_DUMP, G_SWAP, G_DETOUR };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -355,6 +358,15 @@ static void put_down(Sim *s, Critter *c, int x, int y)
     c->carry = 0;
 }
 
+/* Something under (x, y) that isn't open, or the floor. */
+static int solid_below(const Sim *s, int x, int y)
+{
+    if (y + 1 >= s->h)
+        return 1;
+    int t = CELL_TYPE(at(s, x, y + 1));
+    return t != EMPTY && t != WATER && t != CRITTER;
+}
+
 /* Drop what it's carrying on the nearest open cell around it, beside its
  * feet if it can. Stone it was going to build with goes down as loose
  * debris, so it doesn't hang in the air. It's lost only if it's boxed
@@ -372,11 +384,14 @@ static void drop_carry(Sim *s, Critter *c)
             return;
         }
     }
+    /* Iron doesn't fall: it goes only where something holds it up. */
+    int needs_support = !FALLS(CELL_TYPE(c->carry)) && CELL_TYPE(c->carry) != WATER;
     for (int r = 0; r <= 2; r++)
-        for (int y = c->y - c->h - r; y <= c->y + r; y++)
+        for (int y = c->y + r; y >= c->y - c->h - r; y--)
             for (int x = c->x - 1 - r; x <= c->x + c->w + r; x++)
                 if (x >= 0 && x < s->w && y >= 0 && y < s->h &&
-                    CELL_TYPE(at(s, x, y)) == EMPTY) {
+                    CELL_TYPE(at(s, x, y)) == EMPTY &&
+                    (!needs_support || solid_below(s, x, y))) {
                     put_down(s, c, x, y);
                     return;
                 }
@@ -419,13 +434,26 @@ static void end_goal(Sim *s, Critter *c)
     c->next_think = s->frame;
 }
 
-/* Give up on the goal's spot for a while. */
+/* Give up on the goal's spot for a while. Walking straight at things
+ * can leave it stuck behind a wall with everything it wants on the other
+ * side: after a few failures in a row it heads off the other way for a
+ * while, to come at them from somewhere else. */
 static void fail_goal(Sim *s, Critter *c)
 {
+    int away = c->tx < c->x ? 1 : -1;
     c->avoid_x = c->tx;
     c->avoid_y = c->ty;
     c->avoid_until = s->frame + csecs(s, c, AVOID_SECS);
     end_goal(s, c);
+    if (++c->fails >= FAILS_BEFORE_DETOUR) {
+        c->fails = 0;
+        int tx = c->x + away * (DETOUR + (int)(rnd(s) % DETOUR));
+        c->goal = G_DETOUR;
+        c->tx = tx < 0 ? 0 : tx > s->w - c->w ? s->w - c->w : tx;
+        c->ty = c->y;
+        c->stuck = 0;
+        c->state = CR_WALK;
+    }
 }
 
 /* One move toward the goal cell. Returns 1 once it's in reach, 0 while
@@ -556,14 +584,16 @@ static int rank_water(const Sim *s, int x, int y)
 
 /* ---- Homes ---- */
 
+/* Three columns apart: a one-column gap would trap a large critter
+ * under the edge of the hut's roof. */
 static int hut_x(const Home *h)
 {
-    return h->dir > 0 ? h->x : h->x + 8;
+    return h->dir > 0 ? h->x : h->x + 10;
 }
 
 static int well_x(const Home *h)
 {
-    return h->dir > 0 ? h->x + 6 : h->x;
+    return h->dir > 0 ? h->x + 8 : h->x;
 }
 
 static int well_top(const Home *h)
@@ -572,16 +602,19 @@ static int well_top(const Home *h)
 }
 
 /* The plan: a 7-wide well with a one-cell mouth in its roof, and a 5x5
- * hut with its door away from the well.
+ * hut beside it.
  *
  *     hut      well
- *    .###.    ###.###
- *    .   #    #     #
- *    .   #    #     #
- *    .   #    #######
+ *    #####    ###.###
+ *             #     #
+ *                   #
+ *             #######
  *    #####
  *
- * The hut's door is three cells tall so a large critter fits through. */
+ * The hut is a roof over a floor, open at both ends, three cells high
+ * inside so a large critter fits. With a wall and a door, critters
+ * walking straight at what they want would keep getting stuck inside or
+ * behind it. */
 static int plan_at(const Home *h, int x, int y)
 {
     int f = h->y, wx = well_x(h), top = well_top(h);
@@ -594,17 +627,8 @@ static int plan_at(const Home *h, int x, int y)
         return cx == 0 || cx == 6 ? P_WALL : P_WATER;
     }
     int hx = hut_x(h);
-    if (HUTS && x >= hx && x < hx + 5 && y >= f - 4 && y <= f) {
-        int cx = x - hx, ry = y - (f - 4);
-        int door = h->dir > 0 ? 0 : 4;
-        if (ry == 4)
-            return P_WALL;
-        if (ry == 0)
-            return cx >= 1 && cx <= 3 ? P_WALL : P_NONE;
-        if (cx == door)
-            return P_OPEN;
-        return cx == 4 - door ? P_WALL : P_OPEN;
-    }
+    if (x >= hx && x < hx + 5 && y >= f - 4 && y <= f)
+        return y == f || y == f - 4 ? P_WALL : P_OPEN;
     return P_NONE;
 }
 
@@ -711,12 +735,16 @@ static int critter_in(const Sim *s, int x0, int y0, int x1, int y1)
 }
 
 /* The lowest plan cell still to build that's open and has something
- * solid beside or under it. The well's roof waits while anyone is down
- * in it, or they'd be shut in. */
+ * solid beside or under it. The hut's roof has nothing under it but the
+ * floor, so it goes up once the floor is down. The well's roof waits
+ * while anyone is down in it, or they'd be shut in. */
 static int next_build(const Sim *s, const Home *h, int *bx, int *by)
 {
     int top = well_top(h) < h->y - 4 ? well_top(h) : h->y - 4;
     int roof_ok = !critter_in(s, h->wx0, h->wy0, h->wx1, h->wy1);
+    int hx = hut_x(h), floor_done = 1;
+    for (int x = hx; x < hx + 5; x++)
+        floor_done &= built(at(s, x, h->y));
     for (int y = h->y; y >= top; y--)
         for (int x = h->x; x < h->x + HOME_W; x++) {
             if (plan_at(h, x, y) != P_WALL || CELL_TYPE(at(s, x, y)) != EMPTY)
@@ -724,7 +752,8 @@ static int next_build(const Sim *s, const Home *h, int *bx, int *by)
             if (!roof_ok && y == well_top(h) && x >= well_x(h) && x < well_x(h) + 7)
                 continue;
             if (solid_at(s, x - 1, y) || solid_at(s, x + 1, y) ||
-                solid_at(s, x, y + 1) || solid_at(s, x, y - 1)) {
+                solid_at(s, x, y + 1) || solid_at(s, x, y - 1) ||
+                (floor_done && y == h->y - 4 && x >= hx && x < hx + 5)) {
                 *bx = x;
                 *by = y;
                 return 1;
@@ -774,12 +803,40 @@ static int next_clear(const Sim *s, const Home *h, int *jx, int *jy)
     return 0;
 }
 
-/* Stuff to clear off a home's field: loose cells lying on wheat. */
-static int rank_field_junk(const Sim *s, int x, int y)
+/* Loose cells piled on the hut's or the well's roof. */
+static int roof_junk(const Sim *s, const Home *h, int *jx, int *jy)
 {
-    int t = CELL_TYPE(at(s, x, y));
-    if (!diggable(t) || y + 1 >= s->h || CELL_TYPE(at(s, x, y + 1)) != WHEAT)
-        return -1;
+    for (int k = 0; k < 2; k++) {
+        int x0 = k ? well_x(h) : hut_x(h), x1 = x0 + (k ? 7 : 5);
+        int y = (k ? well_top(h) : h->y - 4) - 1;
+        if (y < 0)
+            continue;
+        for (int x = x0; x < x1; x++)
+            if (diggable(CELL_TYPE(at(s, x, y)))) {
+                *jx = x;
+                *jy = y;
+                return 1;
+            }
+    }
+    return 0;
+}
+
+/* Stuff to clear off the field near a home: loose cells lying on wheat
+ * within HOME_RADIUS of it. Junk is dumped further out than that, so it
+ * doesn't get cleared again. */
+static int field_junk(const Sim *s, const Home *h, int *jx, int *jy)
+{
+    int x0 = h->x - HOME_RADIUS, x1 = h->x + HOME_W + HOME_RADIUS;
+    for (int y = h->y - HOME_RADIUS; y <= h->y + HOME_RADIUS; y++)
+        for (int x = x0; x < x1; x++) {
+            if (x < 0 || x >= s->w || y < 0 || y + 1 >= s->h)
+                continue;
+            if (diggable(CELL_TYPE(at(s, x, y))) && CELL_TYPE(at(s, x, y + 1)) == WHEAT) {
+                *jx = x;
+                *jy = y;
+                return 1;
+            }
+        }
     return 0;
 }
 
@@ -795,12 +852,76 @@ static int rank_stone(const Sim *s, int x, int y)
     return -1;
 }
 
-static int rank_iron(const Sim *s, int x, int y)
+/* Unbuilt iron anywhere on the screen, the nearest first: iron is rare,
+ * and worth a long trip. Large critters only. */
+static int find_iron(Sim *s, int i, int *fx, int *fy)
 {
-    uint16_t v = at(s, x, y);
-    if (CELL_TYPE(v) == IRON && !(CELL_COLOR(v) & BUILT))
-        return near_home(s, x, y) ? -1 : 0;
-    return -1;
+    Critter *c = &s->crit[i];
+    if (c->kind != CR_LARGE || s->iron == 0 || s->frame < c->iron_next)
+        return 0;
+    int best = 1 << 30;
+    for (int y = 0; y < s->h; y++)
+        for (int x = 0; x < s->w; x++) {
+            uint16_t v = at(s, x, y);
+            if (CELL_TYPE(v) != IRON || (CELL_COLOR(v) & BUILT))
+                continue;
+            int d = dist(c, x, y);
+            if (d >= best || near_home(s, x, y) || avoided(s, c, x, y) || !open_above(s, x, y))
+                continue;
+            best = d;
+            *fx = x;
+            *fy = y;
+        }
+    if (best < (1 << 30))
+        return 1;
+    c->iron_next = s->frame + csecs(s, c, IRON_LOOK_SECS);
+    return 0;
+}
+
+/* Open air beside (x, y), outside any well: somewhere a critter could
+ * stand to work on it. */
+static int open_beside(const Sim *s, int x, int y)
+{
+    static const int nb[4][2] = {{0, -1}, {-1, 0}, {1, 0}, {0, 1}};
+    for (int k = 0; k < 4; k++) {
+        int xx = x + nb[k][0], yy = y + nb[k][1];
+        if (xx < 0 || xx >= s->w || yy < 0 || yy >= s->h || in_well(s, xx, yy))
+            continue;
+        int t = CELL_TYPE(at(s, xx, yy));
+        if (t == EMPTY || t == CRITTER)
+            return 1;
+    }
+    return 0;
+}
+
+/* The well's own floor, under the water: only reached through the mouth. */
+static int well_floor(const Home *h, int x, int y)
+{
+    return y == h->y && x >= h->wx0 && x <= h->wx1;
+}
+
+/* The lowest built stone in the plan that critter c can get at, floors
+ * first: what iron replaces (rusted iron included). The well's floor is
+ * swapped through the mouth, so for that it gives the mouth. */
+static int stone_to_swap(const Sim *s, const Critter *c, const Home *h, int *bx, int *by)
+{
+    int top = well_top(h) < h->y - 4 ? well_top(h) : h->y - 4;
+    for (int y = h->y; y >= top; y--)
+        for (int x = h->x; x < h->x + HOME_W; x++) {
+            if (plan_at(h, x, y) != P_WALL || CELL_TYPE(at(s, x, y)) != STONE ||
+                !built(at(s, x, y)))
+                continue;
+            if (well_floor(h, x, y)) {
+                mouth(h, bx, by);
+                if (!avoided(s, c, *bx, *by))
+                    return 1;
+            } else if (open_beside(s, x, y) && !avoided(s, c, x, y)) {
+                *bx = x;
+                *by = y;
+                return 1;
+            }
+        }
+    return 0;
 }
 
 /* Critters living at home k. */
@@ -819,7 +940,7 @@ static int residents(const Sim *s, int k, float *eat_per_hour)
 }
 
 /* A spot for a new home near critter c: within SENSE, the ground level
- * to within a cell over all 13 columns, room above it for the tallest
+ * to within a cell over all 15 columns, room above it for the tallest
  * well, food within SENSE, and clear of other homes. Nearer is better. */
 static int find_site(Sim *s, int i, Home *out)
 {
@@ -916,7 +1037,7 @@ static int dump_x(const Sim *s, const Critter *c)
     if (c->home < 0)
         return c->x + (c->x < s->w / 2 ? 6 : -6);
     const Home *h = &s->home[c->home];
-    int left = h->x - HOME_RADIUS, right = h->x + HOME_W + HOME_RADIUS;
+    int left = h->x - HOME_RADIUS - 4, right = h->x + HOME_W + HOME_RADIUS + 4;
     int x = c->x < h->x + HOME_W / 2 ? left : right;
     if (x < 1)
         x = right;
@@ -1072,6 +1193,7 @@ static void farm(Sim *s, int i)
         return;
     if (pour(s, c->tx, c->ty)) {
         c->carry = 0;
+        c->fails = 0;
         c->ax = c->home >= 0 ? c->ax : c->tx;
     }
     end_goal(s, c);
@@ -1094,6 +1216,7 @@ static void stock(Sim *s, int i)
     }
     if (CELL_TYPE(at(s, c->tx, c->ty)) == EMPTY) {
         put_down(s, c, c->tx, c->ty);
+        c->fails = 0;
         s->stocked++;
     }
     end_goal(s, c);
@@ -1140,6 +1263,45 @@ static void build(Sim *s, int i)
         return;
     set_cell(s, c->tx, c->ty, c->carry | (BUILT << 8));
     c->carry = 0;
+    c->fails = 0;
+    s->laid++;
+    end_goal(s, c);
+}
+
+/* Swapping: take out a built stone cell and lay the iron it carries in
+ * its place. The stone goes down beside it as debris. */
+static void swap_in(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    int sx = c->tx, sy = c->ty;
+    if (at_mouth(s, c)) {
+        /* Down the well on a rope: the first stone in its floor. */
+        const Home *h = &s->home[c->home];
+        sx = -1;
+        for (int x = h->wx0; x <= h->wx1 && sx < 0; x++)
+            if (CELL_TYPE(at(s, x, h->y)) == STONE && built(at(s, x, h->y)))
+                sx = x;
+        sy = h->y;
+        if (sx < 0) {
+            end_goal(s, c);
+            return;
+        }
+    }
+    uint16_t v = at(s, sx, sy);
+    if (CELL_TYPE(v) != STONE || !built(v) || CELL_TYPE(c->carry) != IRON) {
+        end_goal(s, c);
+        return;
+    }
+    c->state = CR_BUILD;
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, MINE_STONE_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    set_cell(s, sx, sy, c->carry | (BUILT << 8));
+    c->carry = CELL(STONE, CELL_COLOR(v) & ~BUILT);
+    drop_carry(s, c);
     s->laid++;
     end_goal(s, c);
 }
@@ -1202,10 +1364,12 @@ static void eat(Sim *s, int i)
         else
             set_cell(s, c->tx, c->ty, CELL(MOSS, CELL_COLOR(food) & ~WHEAT_MAX));
         s->bites++;
+        c->fails = 0;
         c->food += WHEAT_BITE;
         c->ax = c->tx;
     } else {
         set_cell(s, c->tx, c->ty, CELL(WET_DIRT, CELL_COLOR(food)));
+        c->fails = 0;
         c->food += MOSS_MEAL;
         c->ax = c->tx;
     }
@@ -1246,9 +1410,15 @@ static int use_carry(Sim *s, int i)
             c->state = CR_CARRY;
             return 1;
         }
+        if (t == IRON && h && stone_to_swap(s, c, h, &x, &y)) {
+            set_goal(s, c, G_SWAP, x, y);
+            c->state = CR_CARRY;
+            return 1;
+        }
         /* Nowhere to lay it just now (a critter standing there, say):
-         * hang on to it and try again in a while. */
-        if (h && !(part_done(s, h, 1) && (!HUTS || part_done(s, h, 0))))
+         * hang on to it and try again in a while. Iron is worth keeping
+         * until there's stone to swap it for. */
+        if (h && (t == IRON || !(part_done(s, h, 1) && part_done(s, h, 0))))
             return 0;
     } else {
         set_goal(s, c, G_DUMP, dump_x(s, c), c->y);
@@ -1303,7 +1473,8 @@ static void think(Sim *s, int i)
         settle(s, i);
     Home *h = c->home >= 0 ? &s->home[c->home] : NULL;
 
-    if (h && (next_clear(s, h, &fx, &fy) || find_best(s, i, rank_field_junk, &fx, &fy))) {
+    if (h && (next_clear(s, h, &fx, &fy) || roof_junk(s, h, &fx, &fy) ||
+              field_junk(s, h, &fx, &fy)) && !avoided(s, c, fx, fy)) {
         set_goal(s, c, G_CLEAR, fx, fy);
         return;
     }
@@ -1330,17 +1501,23 @@ static void think(Sim *s, int i)
         return;
     }
 
-    /* Build: fetch material for the next plan cell. */
-    if (h && next_build(s, h, &px, &py)) {
-        if ((c->kind == CR_LARGE && find_best(s, i, rank_iron, &fx, &fy)) ||
-            find_best(s, i, rank_stone, &fx, &fy)) {
-            set_goal(s, c, G_BUILD, fx, fy);
-            return;
-        }
+    /* Build: fetch material for the next plan cell, iron if it's a large
+     * critter and there's any to be had, or stone. With everything built,
+     * large critters go on fetching iron to swap for the stone in it,
+     * which also mends rust. */
+    int need = h && next_build(s, h, &px, &py);
+    int swap = h && !need && stone_to_swap(s, c, h, &px, &py);
+    if ((need || swap) && find_iron(s, i, &fx, &fy)) {
+        set_goal(s, c, G_BUILD, fx, fy);
+        return;
+    }
+    if (need && find_best(s, i, rank_stone, &fx, &fy)) {
+        set_goal(s, c, G_BUILD, fx, fy);
+        return;
     }
 
     /* Nothing else to do and all built: dig the well a row deeper. */
-    if (h && well_done && (!HUTS || part_done(s, h, 0)) && h->rows < WELL_MAX_ROWS &&
+    if (h && well_done && part_done(s, h, 0) && h->rows < WELL_MAX_ROWS &&
         !next_build(s, h, &px, &py)) {
         h->rows++;
         well_rect(h);
@@ -1478,6 +1655,7 @@ static void critter_tick(Sim *s, int i)
 
     switch (c->goal) {
     case G_WANDER:
+    case G_DETOUR:
         if (c->x == c->tx || !step_side(s, i, c->tx < c->x ? -1 : 1)) {
             if (c->x == c->tx || ++c->stuck >= STUCK_MOVES) {
                 end_goal(s, c);
@@ -1505,6 +1683,10 @@ static void critter_tick(Sim *s, int i)
     case G_CLEAR:
         if (approach(s, i))
             clear(s, i);
+        break;
+    case G_SWAP:
+        if (approach(s, i))
+            swap_in(s, i);
         break;
     case G_DUMP:
         /* Far enough out, or as far as it can get: put it down. Here

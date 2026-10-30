@@ -146,6 +146,7 @@ typedef struct {
     int goal, tx, ty;       /* what it's doing and where */
     int stuck;              /* moves without progress toward the goal */
     int best;               /* closest it has got to the goal */
+    int fails;              /* goals given up on in a row */
     int avoid_x, avoid_y;   /* a spot it gave up on, */
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
@@ -157,9 +158,10 @@ typedef struct {
     uint32_t next_move;     /* sim frame of the next move or fall */
     uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
     uint32_t dig_at;        /* sim frame it can next dig up */
+    uint32_t iron_next;     /* sim frame it can next look for iron */
 } Critter;
 
-/* A colony's home: a hut and a well side by side on level ground, 13
+/* A colony's home: a hut and a well side by side on level ground, 15
  * cells wide, with x its left edge and y the row of both floors. The
  * critters build them cell by cell from the plan in critter.c. */
 #define MAX_HOMES 8
