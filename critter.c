@@ -14,6 +14,10 @@
 #define FALL_STEPS  3       /* falling, at sand's pace */
 #define THINK_SECS  1.0f
 
+/* A critter steps up a cell as it walks, and hops up as much as JUMP
+ * cells onto something it can stand on. */
+#define JUMP        3
+
 /* Idle wandering: how far, and how long to stand between strolls. */
 #define WANDER      8
 #define IDLE_SECS   6.0f
@@ -132,6 +136,7 @@
 #define PATCH_RANGE 12
 #define STACK_SECS  1.0f
 #define CLIMB_PATIENCE (20 * STUCK_MOVES)
+#define STAIR_RISE  JUMP
 
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
@@ -327,6 +332,30 @@ static int built(uint16_t v)
     return (t == STONE || t == IRON) && (CELL_COLOR(v) & BUILT);
 }
 
+/* A hop of at least lo cells, the highest it can make up to JUMP:
+ * straight up through open air, then across onto something solid. */
+static int hop(Sim *s, int i, int d, int lo)
+{
+    Critter *c = &s->crit[i];
+    int best = 0;
+    for (int j = 1; j <= JUMP && fits(s, i, c->x, c->y - j); j++) {
+        if (j < lo || !fits(s, i, c->x + d, c->y - j))
+            continue;
+        for (int xx = c->x + d; xx < c->x + d + c->w; xx++) {
+            int t = CELL_TYPE(at(s, xx, c->y - j + 1));
+            if (t != EMPTY && t != WATER)
+                best = j;
+        }
+    }
+    if (!best)
+        return 0;
+    c->face = (int8_t)d;
+    c->climbing = 0;
+    c->step++;
+    relocate(s, i, c->x + d, c->y - best);
+    return 1;
+}
+
 static int step_side(Sim *s, int i, int d)
 {
     Critter *c = &s->crit[i];
@@ -342,6 +371,8 @@ static int step_side(Sim *s, int i, int d)
         relocate(s, i, c->x + d, c->y - 1);
         return 1;
     }
+    if (hop(s, i, d, 2))
+        return 1;
     /* The column it's stepping into, from a step up down to its feet. */
     int nx = d > 0 ? c->x + c->w : c->x - 1;
     /* Walls and rocks it can clamber up, a cell at a time, reaching up a
@@ -1614,10 +1645,11 @@ static void climb_progress(Sim *s, Critter *c, int px, int py)
 
 /* Toward (px, py) on the top of a ledge. Up level with it, it walks
  * across. Below a floating ledge, it builds stairs of brick from the
- * nearer end down and out to the ground: step k is k cells out and k
- * cells down from the end of the ledge's top, floating like the ledge.
- * It lays them from the bottom up, a grain of sand fetched for each,
- * standing on the step below. Returns 1 once it's there. */
+ * nearer end down and out to the ground: step k is k cells out and
+ * STAIR_RISE * k cells down from the end of the ledge's top, floating
+ * like the ledge, a hop apart. It lays them from the bottom up, a grain
+ * of sand fetched for each, standing on the step below. Returns 1 once
+ * it's there. */
 static int climb_to(Sim *s, int i, int px, int py)
 {
     Critter *c = &s->crit[i];
@@ -1637,7 +1669,7 @@ static int climb_to(Sim *s, int i, int px, int py)
      * last one needed. */
     int next = -1, last = -1;
     for (int k = 0;; k++) {
-        int x = col + d * k, y = top + k;
+        int x = col + d * k, y = top + STAIR_RISE * k;
         if (x < 0 || x >= s->w || y >= s->h)
             break;
         uint16_t v = at(s, x, y);
@@ -1668,7 +1700,7 @@ static int climb_to(Sim *s, int i, int px, int py)
         drop_carry(s, c);
         return 0;
     }
-    int bx = col + d * (next < 0 ? 0 : next), by = top + (next < 0 ? 0 : next);
+    int bx = col + d * (next < 0 ? 0 : next), by = top + STAIR_RISE * (next < 0 ? 0 : next);
     if (next >= 0 && c->carry && in_reach(c, bx, by) && CELL_TYPE(at(s, bx, by)) == EMPTY &&
         (bx < c->x || bx >= c->x + c->w)) {
         /* Sand pressed into brick crumbles in time; dirt brick lasts. */
@@ -1684,9 +1716,12 @@ static int climb_to(Sim *s, int i, int px, int py)
      * stairs it walks out past their foot; on them, or past their foot,
      * it walks up them with a grain, or down them for one. */
     int k = ((d < 0 ? c->x + c->w - 1 : c->x) - col) * d;
-    int under = k >= 0 && k <= last && c->y >= top + k;
+    int under = k >= 0 && k <= last && c->y >= top + STAIR_RISE * k;
     int way = under || (next >= 0 && !c->carry) ? d : -d;
-    step_side(s, i, way);
+    /* Up the stairs a hop at a time, rather than stepping off a step into
+     * the space under the next. */
+    if (way == d || !hop(s, i, way, 2))
+        step_side(s, i, way);
     climb_progress(s, c, px, py);
     return 0;
 }

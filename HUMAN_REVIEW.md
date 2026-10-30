@@ -542,6 +542,37 @@ critters already clear off their patch, pressed into lasting brick.
 Material would then always be at hand, and fewer trips would take them
 off their ledge.
 
+### Follow-up: hopping
+
+Asked for: critters jump up to 3 pixels.
+
+- A critter that can't walk or step up hops instead: straight up 2-3
+  cells through open air, then across onto something solid.
+- Stair steps now rise 3 per column, a hop apart, so stairs take about a
+  third of the bricks. Going up stairs, a critter tries the highest hop
+  first; otherwise it walked off a step into the space under the next.
+- t17: from the ground to a patch 31 rows up in 3 minutes with 11 steps,
+  for both sizes (was 12-13 minutes and 35 steps).
+
+**In realistic days (3 seeds, traced):** critters with a patch are on it
+36-43% of the time (was 19-37%) and below it 45-51% (was 52-70%). They
+start back for it about 1,000-2,200 times a day (was 2,300-2,700). They
+lay more stair steps in total (about 1,200 a day, was 200-360), because
+more of their climbs succeed and each crumbles after 20 minutes.
+
+**Matrix (8 seeds x 3 days):** survival is about the same, within the
+noise.
+
+| Scenario | Runs alive at end | Mean life (avg) | Fill held over 3 days |
+|---|---|---|---|
+| typical | 4/8 | 0.9-2.3 h (1.6) | 0.4-5.1 h |
+| nocommit | 2/8 | 1.1-2.5 h (1.7) | 0.4-4.9 h |
+| showers | 3/8 | 1.2-1.7 h (1.4) | 0.8-3.7 h |
+| starve240 | 7/8 | 3.4-7.8 h (5.3) | 2.7-15.6 h |
+
+Still no well has held water, and home cells laid stay at 0-17 a run.
+t19 still stops at 7 of 9 cells.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
