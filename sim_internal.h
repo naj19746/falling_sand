@@ -138,4 +138,8 @@ static inline int sand_can_enter(uint16_t c)
     return t == EMPTY || (t == WATER && !(CELL_COLOR(c) & SEEPING));
 }
 
+
+/* critter.c: a bolt just struck (s->bolt); critters near it get charged. */
+void charge_critters(Sim *s);
+
 #endif

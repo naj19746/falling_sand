@@ -139,6 +139,7 @@ typedef struct {
     int w, h;               /* from kind */
     int8_t face;            /* -1 left, 1 right */
     uint8_t step;           /* walking animation */
+    uint8_t spark;          /* charged: body cells drawn as sparks */
     float food;             /* 0..1; starves at 0 */
     uint32_t charged_until; /* sim frame; supercharged until then */
     uint16_t carry;         /* the cell it's holding, or 0 */

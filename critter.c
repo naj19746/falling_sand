@@ -18,6 +18,13 @@
 #define WANDER      8
 #define IDLE_SECS   6.0f
 
+/* Lightning: critters this close to a strike, or touching the bolt, are
+ * supercharged for CHARGE_MINUTES and do everything CHARGE_SPEEDUP times
+ * as fast. */
+#define CHARGE_RADIUS  20
+#define CHARGE_MINUTES 10
+#define CHARGE_SPEEDUP 3
+
 /* Moves without getting closer before a critter gives up on its goal. */
 #define STUCK_MOVES 6
 
@@ -27,6 +34,21 @@ static int secs(const Sim *s, float sec)
 {
     int n = (int)(sec * s->steps_per_sec + 0.5f);
     return n < 1 ? 1 : n;
+}
+
+static int charged(const Sim *s, const Critter *c)
+{
+    return s->frame < c->charged_until;
+}
+
+/* A timing for critter c: shorter while it's charged. Every critter
+ * timing but falling goes through here. */
+static int csecs(const Sim *s, const Critter *c, float sec)
+{
+    int n = secs(s, sec);
+    if (charged(s, c))
+        n = (n + CHARGE_SPEEDUP - 1) / CHARGE_SPEEDUP;
+    return n;
 }
 
 static inline uint16_t at(const Sim *s, int x, int y)
@@ -80,7 +102,7 @@ static int part_at(const Critter *c, int dx, int dy)
         return (dx == 1) == (c->face > 0) ? PART_EYE : PART_HEAD;
     }
     if (dy < c->h - 1 || c->h < 3)
-        return PART_BODY;
+        return c->spark ? PART_SPARK : PART_BODY;
     return (dx + c->step) & 1 ? PART_LEG_ALT : PART_LEG;
 }
 
@@ -150,7 +172,7 @@ static int step_toward(Sim *s, int i)
 static void think(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
-    c->next_think = s->frame + secs(s, THINK_SECS);
+    c->next_think = s->frame + csecs(s, c, THINK_SECS);
     if (c->goal != G_NONE)
         return;
     if (s->frame < c->work_until)
@@ -170,6 +192,13 @@ static void critter_tick(Sim *s, int i)
 
     if (s->frame < c->next_move)
         return;
+    /* A charged critter's body crackles every move, even standing still;
+     * when the charge runs out it goes back to normal. */
+    int spark = charged(s, c) ? !c->spark : 0;
+    if (spark != c->spark) {
+        c->spark = (uint8_t)spark;
+        draw(s, i);
+    }
     if (!supported(s, c)) {
         c->state = CR_FALLING;
         if (fits(s, i, c->x, c->y + 1))
@@ -190,15 +219,54 @@ static void critter_tick(Sim *s, int i)
             if (before == 0 || ++c->stuck >= STUCK_MOVES) {
                 c->goal = G_NONE;
                 c->state = CR_IDLE;
-                c->work_until = s->frame + secs(s, IDLE_SECS * (0.5f + rndf(s)));
+                c->work_until = s->frame + csecs(s, c, IDLE_SECS * (0.5f + rndf(s)));
             }
         }
-        c->next_move = s->frame + secs(s, MOVE_SECS);
+        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
         break;
     }
     default:
-        c->next_move = s->frame + secs(s, MOVE_SECS);
+        c->next_move = s->frame + csecs(s, c, MOVE_SECS);
         break;
+    }
+}
+
+/* The bolt's path passes through or right next to critter c: walk each
+ * line between corners a cell at a time. */
+static int on_bolt(const Bolt *b, const Critter *c)
+{
+    int x0 = c->x - 1, x1 = c->x + c->w, y0 = c->y - c->h, y1 = c->y + 1;
+    for (int l = 0; l < b->lines; l++)
+        for (int k = b->start[l]; k + 1 < b->start[l + 1]; k++) {
+            int dx = b->x[k + 1] - b->x[k], dy = b->y[k + 1] - b->y[k];
+            int n = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+            for (int j = 0; j <= n; j++) {
+                int x = b->x[k] + (n ? dx * j / n : 0);
+                int y = b->y[k] + (n ? dy * j / n : 0);
+                if (x >= x0 && x <= x1 && y >= y0 && y <= y1)
+                    return 1;
+            }
+        }
+    return 0;
+}
+
+void charge_critters(Sim *s)
+{
+    const Bolt *b = &s->bolt;
+    uint32_t until = s->frame + (uint32_t)secs(s, CHARGE_MINUTES * 60.0f);
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        Critter *c = &s->crit[i];
+        if (c->state == CR_FREE)
+            continue;
+        /* From the middle of its body. */
+        int dx = c->x + c->w / 2 - b->tx, dy = c->y - c->h / 2 - b->ty;
+        if (dx * dx + dy * dy > CHARGE_RADIUS * CHARGE_RADIUS && !on_bolt(b, c))
+            continue;
+        /* A second strike makes it last longer, not go faster. */
+        if (until > c->charged_until)
+            c->charged_until = until;
+        if (c->next_move > s->frame + 1)
+            c->next_move = s->frame + 1;
     }
 }
 

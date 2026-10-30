@@ -1497,7 +1497,7 @@ static int strike_target(Sim *s, int ox, int oy, int reach, int *tx, int *ty)
         if (x < 0 || x >= s->w || y < 0 || y >= s->h || dx * dx + dy * dy > reach * reach)
             continue;
         int t = CELL_TYPE(s->cells[y * s->w + x]);
-        if (t != EMPTY && t != WATER && resting(s, x, y)) {
+        if (t != EMPTY && t != WATER && t != CRITTER && resting(s, x, y)) {
             *tx = x;
             *ty = y;
             return 0;
@@ -1556,6 +1556,7 @@ int sim_strike(Sim *s)
         if (b->y[i] > b->box[3]) b->box[3] = b->y[i];
     }
     b->id++;
+    charge_critters(s);
 
     /* The first struck moss with open air, water or loose grains above it
      * becomes a tree; the rest stays as ground cover. The column above the
