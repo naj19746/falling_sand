@@ -26,11 +26,15 @@ lock file stops a second desktop copy, but `--windowed` runs alongside it.
 main.c      startup, flags (usage()), config load, main loop, input, pause when covered
 sim.c/.h    the cellular automaton: all cell types, emitters, blaster, drain cycle,
             seeds, lightning, glass, trees, sleeping chunks
+sim_internal.h  helpers shared by sim.c and critter.c (set_cell, rnd, move, ...)
+critter.c   critters: bodies on the grid, food, wheat, homes and wells (see CRITTERS.md)
 render.c/.h draws changed chunks into the X window through MIT-SHM
 x11.c/.h    desktop window properties, the "is the desktop covered" check
 audio.c/.h  PulseAudio loudness of the output (background thread)
 weather.c/.h  Open-Meteo via curl → drops per minute (background thread)
 spotify.c/.h  Spotify over D-Bus MPRIS → count of songs finished (background thread)
+progress.c/.h  finished kana sets (curl) and new Pixelorama drawings → critters
+            waiting to drop in, kept in ~/.local/state/sandbg/progress (background thread)
 config.c/.h ini parsing, defaults, validation
 keyboard.c/.h  Keychron Q4 per-key LEDs: screen -> keys, raw HID protocol
 firmware/keychron-q4-sandbg/  the QMK keymap the keyboard needs for per-key control
@@ -80,7 +84,12 @@ steps, and checks that:
 Then look at it with `make run`. For the external inputs, use
 `--set rain_override=<drops/min>` for rain, the `s` and `l` keys for seeds
 and lightning, and `--meter`, `--weather` and `--spotify` to check what
-sandbg sees.
+sandbg sees. For critters, the `c` key drops one, and `--progress` shows the
+kana counters and drawings that earn them. Test rewards with a temporary
+`XDG_STATE_HOME`, a fake kana server for `kana_url`, a temporary
+`pixelorama_config`, and `SANDBG_PROGRESS_POLL_MS` to poll faster. Don't
+run `--critter` while the desktop copy is up unless you mean to: it signals
+every process named sandbg.
 
 For the keyboard, `--keyboard-preview` draws the computed LED colors in the
 terminal (it needs no hardware), and `--keyboard` checks whether the
