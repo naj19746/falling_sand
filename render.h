@@ -40,6 +40,7 @@ typedef struct {
     int             bolt_box[4];    /* chunk box it covered last frame */
     int             have_bolt;
     int             carry_at[MAX_CRITTERS][2];  /* cell a carried cell was drawn at, or -1 */
+    int             toss_at[MAX_CRITTERS][2];   /* likewise a tossed one in flight */
 
     /* --profile counters, reset by the caller */
     long            chunks_drawn;

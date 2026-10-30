@@ -18,6 +18,11 @@
  * as fit in this, and at least one. */
 #define IMAGE_BYTES (2 << 20)
 
+/* A tossed scoop of sand flies off the screen over TOSS_STEPS sim steps,
+ * rising TOSS_HEIGHT cells. */
+#define TOSS_STEPS  30
+#define TOSS_HEIGHT 10
+
 #define BOLT_FRAMES 6
 #define BOLT_SOLID  2
 #define BOLT_FORKS  3
@@ -264,7 +269,7 @@ static int render_setup(Render *r, const PaletteDef *pd)
     if (!r->dirty)
         return -1;
     for (int i = 0; i < MAX_CRITTERS; i++)
-        r->carry_at[i][0] = r->carry_at[i][1] = -1;
+        r->carry_at[i][0] = r->carry_at[i][1] = r->toss_at[i][0] = r->toss_at[i][1] = -1;
 
     uint32_t autumn[256];
     for (int t = 0; t < 32; t++)
@@ -550,30 +555,58 @@ static int carry_spot(const Render *r, const Sim *s, int i, int *x, int *y)
     return *x >= 0 && *x < r->w && *y >= 0 && *y < r->h;
 }
 
+/* Where critter i's last toss is in its flight: an arc up and off the
+ * side of the screen over TOSS_STEPS sim steps. Returns 0 once it's gone
+ * (or off the screen). */
+static int toss_spot(const Render *r, const Sim *s, int i, int *x, int *y)
+{
+    const Toss *t = &s->toss[i];
+    uint32_t age = s->frame - t->frame;
+    if (!t->frame || age >= TOSS_STEPS)
+        return 0;
+    int reach = (t->dir < 0 ? t->x : r->w - t->x) + 2;
+    int k = (int)age, n = TOSS_STEPS;
+    *x = t->x + t->dir * reach * k / n;
+    *y = t->y - TOSS_HEIGHT * 4 * k * (n - k) / (n * n);
+    return *x >= 0 && *x < r->w && *y >= 0 && *y < r->h;
+}
+
 static void draw_carried(Render *r, const Sim *s)
 {
     for (int i = 0; i < MAX_CRITTERS; i++) {
         int x, y;
         if (carry_spot(r, s, i, &x, &y))
             put_cell(r, x, y, cell_color(r, s->crit[i].carry));
+        if (toss_spot(r, s, i, &x, &y))
+            put_cell(r, x, y, cell_color(r, s->toss[i].cell));
     }
 }
 
-/* A carried cell moves with its critter: redraw the chunks it left and
- * the ones it's in now, only when it moves. */
+/* Redraw the chunk an overlay cell left and the one it's in now, only
+ * when it moves. */
+static void mark_moved(Render *r, int x, int y, int prev[2])
+{
+    if (x == prev[0] && y == prev[1])
+        return;
+    if (prev[0] >= 0)
+        r->dirty[(prev[1] >> CHUNK_SHIFT) * r->cw + (prev[0] >> CHUNK_SHIFT)] = 1;
+    if (x >= 0)
+        r->dirty[(y >> CHUNK_SHIFT) * r->cw + (x >> CHUNK_SHIFT)] = 1;
+    prev[0] = x;
+    prev[1] = y;
+}
+
+/* Carried and tossed cells move with their critters. */
 static void mark_carried(Render *r, const Sim *s)
 {
     for (int i = 0; i < MAX_CRITTERS; i++) {
-        int x = -1, y = -1, *prev = r->carry_at[i];
-        carry_spot(r, s, i, &x, &y);
-        if (x == prev[0] && y == prev[1])
-            continue;
-        if (prev[0] >= 0)
-            r->dirty[(prev[1] >> CHUNK_SHIFT) * r->cw + (prev[0] >> CHUNK_SHIFT)] = 1;
-        if (x >= 0)
-            r->dirty[(y >> CHUNK_SHIFT) * r->cw + (x >> CHUNK_SHIFT)] = 1;
-        prev[0] = x;
-        prev[1] = y;
+        int x, y;
+        if (!carry_spot(r, s, i, &x, &y))
+            x = y = -1;
+        mark_moved(r, x, y, r->carry_at[i]);
+        if (!toss_spot(r, s, i, &x, &y))
+            x = y = -1;
+        mark_moved(r, x, y, r->toss_at[i]);
     }
 }
 

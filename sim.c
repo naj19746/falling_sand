@@ -313,7 +313,8 @@ void sim_reset(Sim *s)
     }
     s->phase = PHASE_FILL;
     s->drain_steps = 0;
-    s->stall_steps = s->stall_tried = s->stall_grains = 0;
+    s->stall_steps = s->stall_tried = s->stall_grains = s->stall_poured = s->toss_window = 0;
+    s->held = 0;
     place_ledges(s);
 }
 
@@ -384,8 +385,9 @@ static void clear_unkept(Sim *s)
     memset(s->keep, 0, (size_t)s->w * s->h);
     s->kept_grains = 0;
     s->kept_solids = 0;
-    s->stall_steps = s->stall_tried = 0;
+    s->stall_steps = s->stall_tried = s->stall_poured = s->toss_window = 0;
     s->stall_grains = s->grains;
+    s->held = 0;
     wake_all(s);
     place_ledges(s);
 }
@@ -396,6 +398,7 @@ void sim_start_drain(Sim *s)
         return;
     s->phase = PHASE_DRAIN;
     s->drain_steps = 0;
+    s->held = 0;
     mark_kept(s);
     if (s->critters)
         critters_drain(s);
@@ -480,8 +483,10 @@ static void emit(Sim *s, Emitter *e, int div, int *tried)
         if (x < 0 || x >= s->w)
             continue;
         (*tried)++;
-        if (CELL_TYPE(s->cells[x]) == EMPTY)
+        if (CELL_TYPE(s->cells[x]) == EMPTY) {
             set_cell(s, x, 0, CELL(SAND, grain_color(s)));
+            s->stall_poured++;
+        }
     }
 }
 
@@ -1364,10 +1369,11 @@ void sim_step(Sim *s)
         s->hue -= 256.0f;
 
     if (s->phase == PHASE_FILL) {
-        /* A living tree holds off the drain: pour at a trickle instead,
-         * until the screen is overfull. */
+        /* A living tree or a farmed field holds off the drain: pour at a
+         * trickle instead, until the screen is overfull. */
         int full = s->grains >= (int)(s->fill_reset * s->w * s->h);
-        int hold = full && s->trees > 0;
+        int hold = full && (s->trees > 0 || s->farms > 0);
+        s->held = hold;
         int tried = 0;
         for (int i = 0; i < s->n_emitters; i++)
             emit(s, &s->em[i], hold ? HOLD_POUR_DIV : 1, &tried);
@@ -1376,9 +1382,11 @@ void sim_step(Sim *s)
         if (++s->stall_steps >= STALL_STEPS) {
             /* A held tree's trickle grows slower, so expect less of it. */
             float gain = STALL_GAIN / (hold ? HOLD_POUR_DIV : 1);
+            /* Grains critters tossed off the screen count as poured, so
+             * their keeping up doesn't look like a stalled fill. */
             stalled = s->stall_tried > 0 &&
-                      s->grains - s->stall_grains < (int)(gain * s->w * s->h);
-            s->stall_steps = s->stall_tried = 0;
+                      s->grains + s->toss_window - s->stall_grains < (int)(gain * s->w * s->h);
+            s->stall_steps = s->stall_tried = s->stall_poured = s->toss_window = 0;
             s->stall_grains = s->grains;
         }
         if ((full && !hold) || stalled)
@@ -1403,6 +1411,8 @@ void sim_step(Sim *s)
         update_trees(s);
     if (s->critters)
         update_critters(s);
+    else
+        s->farms = 0;
 
     if (s->blaster_on || s->lightning_on)
         blaster_move(s);

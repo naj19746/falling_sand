@@ -77,12 +77,26 @@
 #define MINE_IRON_SECS  4.5f
 #define PLACE_SECS      1.0f
 
+/* Tossing: while a farm holds the fill, critters within TOSS_RANGE of a
+ * side edge throw sand off the screen, TOSS_SCOOP cells at a time for a
+ * large critter (one for a small), a throw every TOSS_SECS. Tossing can
+ * offset at most TOSS_SHARE of what the emitters pour, so the screen
+ * always drains in the end. Homes this close to an edge are preferred. */
+#define TOSS_RANGE  30
+#define TOSS_SCOOP  3
+#define TOSS_SECS   3.0f
+#define TOSS_SHARE  0.75f
+#define EDGE_BONUS  20
+
+/* Farms are counted about once a second. */
+#define FARM_COUNT_SECS 1.0f
+
 /* Looking for iron anywhere on screen costs a full scan, so a critter
  * that found none waits this long before looking again. */
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -977,6 +991,8 @@ static int find_site(Sim *s, int i, Home *out)
         if (!ok)
             continue;
         int d = abs(x0 + HOME_W / 2 - c->x) + abs(f - c->y);
+        if (x0 < TOSS_RANGE || x0 + HOME_W > s->w - TOSS_RANGE)
+            d -= EDGE_BONUS;
         if (d >= best)
             continue;
         /* Food near the middle of it. */
@@ -1268,6 +1284,79 @@ static void build(Sim *s, int i)
     end_goal(s, c);
 }
 
+/* Sand to throw: loose sand, open above. */
+static int rank_sand(const Sim *s, int x, int y)
+{
+    int t = CELL_TYPE(at(s, x, y));
+    return (t == SAND || t == DEBRIS || t == SHARD) && open_above(s, x, y) ? 0 : -1;
+}
+
+/* Tossing can still take away some of what the emitters poured this
+ * stall window. */
+static int toss_room(const Sim *s)
+{
+    return s->toss_window < TOSS_SHARE * s->stall_poured;
+}
+
+/* Scoop up the sand at the goal and next to it, and throw it off the
+ * nearer side of the screen. */
+static void toss(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    c->state = CR_DIG;
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, TOSS_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    int want = c->kind == CR_LARGE ? TOSS_SCOOP : 1, n = 0;
+    uint16_t last = 0;
+    for (int dy = 0; dy <= 1 && n < want; dy++)
+        for (int dx = -1; dx <= 1 && n < want; dx++) {
+            int x = c->tx + dx, y = c->ty + dy;
+            if (x < 0 || x >= s->w || y >= s->h || !toss_room(s))
+                continue;
+            int t = CELL_TYPE(at(s, x, y));
+            if (t != SAND && t != DEBRIS && t != SHARD)
+                continue;
+            last = at(s, x, y);
+            set_cell(s, x, y, CELL(EMPTY, 0));
+            s->tossed++;
+            s->toss_window++;
+            n++;
+        }
+    if (n) {
+        Toss *t = &s->toss[i];
+        t->frame = s->frame;
+        t->x = c->x + c->w / 2;
+        t->y = c->y - c->h;
+        t->dir = c->x < s->w / 2 ? -1 : 1;
+        t->cell = last;
+        c->fails = 0;
+    }
+    end_goal(s, c);
+}
+
+/* Homes with wheat near them, which hold the fill like a living tree. */
+static void count_farms(Sim *s)
+{
+    int n = 0;
+    for (int k = 0; k < MAX_HOMES; k++) {
+        const Home *h = &s->home[k];
+        float eat;
+        if (!h->used || !residents(s, k, &eat))
+            continue;
+        int found = 0;
+        for (int y = h->y - SENSE; y <= h->y + SENSE && !found; y++)
+            for (int x = h->x - SENSE; x < h->x + HOME_W + SENSE && !found; x++)
+                found = x >= 0 && x < s->w && y >= 0 && y < s->h &&
+                        CELL_TYPE(at(s, x, y)) == WHEAT;
+        n += found;
+    }
+    s->farms = n;
+}
+
 /* Swapping: take out a built stone cell and lay the iron it carries in
  * its place. The stone goes down beside it as debris. */
 static void swap_in(Sim *s, int i)
@@ -1516,6 +1605,14 @@ static void think(Sim *s, int i)
         return;
     }
 
+    /* The fill is being held: near an edge, throw sand off the screen
+     * while that still slows the fill. */
+    int edge = c->x < TOSS_RANGE ? -1 : c->x + c->w > s->w - TOSS_RANGE ? 1 : 0;
+    if (s->held && edge && toss_room(s) && find_best(s, i, rank_sand, &fx, &fy)) {
+        set_goal(s, c, G_TOSS, fx, fy);
+        return;
+    }
+
     /* Nothing else to do and all built: dig the well a row deeper. */
     if (h && well_done && part_done(s, h, 0) && h->rows < WELL_MAX_ROWS &&
         !next_build(s, h, &px, &py)) {
@@ -1690,6 +1787,10 @@ static void critter_tick(Sim *s, int i)
         if (approach(s, i))
             swap_in(s, i);
         break;
+    case G_TOSS:
+        if (approach(s, i))
+            toss(s, i);
+        break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,
          * it waits where it is. */
@@ -1860,6 +1961,8 @@ void update_critters(Sim *s)
 {
     if (!s->critters_on)
         return;
+    if (s->frame % (uint32_t)secs(s, FARM_COUNT_SECS) == 0)
+        count_farms(s);
     for (int i = 0; i < MAX_CRITTERS; i++)
         if (s->crit[i].state != CR_FREE && s->crit[i].state != CR_AWAY)
             critter_tick(s, i);
@@ -1869,6 +1972,8 @@ void reset_critters(Sim *s)
 {
     memset(s->crit, 0, sizeof s->crit);
     memset(s->home, 0, sizeof s->home);
+    memset(s->toss, 0, sizeof s->toss);
+    s->farms = 0;
     s->critters = 0;
 }
 

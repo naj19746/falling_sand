@@ -161,6 +161,13 @@ typedef struct {
     uint32_t iron_next;     /* sim frame it can next look for iron */
 } Critter;
 
+/* A toss of sand off the screen, for the renderer to draw as an arc. */
+typedef struct {
+    uint32_t frame;         /* when it was thrown; 0 = none */
+    int x, y, dir;          /* from where, and which way */
+    uint16_t cell;          /* what was thrown, for its color */
+} Toss;
+
 /* A colony's home: a hut and a well side by side on level ground, 15
  * cells wide, with x its left edge and y the row of both floors. The
  * critters build them cell by cell from the plan in critter.c. */
@@ -198,6 +205,7 @@ typedef struct {
     int stall_steps;        /* fill steps into the current stall window */
     int stall_tried;        /* grains the emitters tried to pour in it */
     int stall_grains;       /* grains when it started */
+    int stall_poured;       /* grains the emitters got in during it */
 
     int blaster_on;
     Blaster bl;
@@ -254,6 +262,11 @@ typedef struct {
     int wheat_per_pour;     /* stock levels one pour adds */
     Critter crit[MAX_CRITTERS];
     Home home[MAX_HOMES];
+    int farms;              /* homes with wheat: like trees, they hold the fill */
+    int held;               /* the fill is being held: critters toss sand */
+    long tossed;            /* grains critters have tossed off the screen */
+    int toss_window;        /* of those, in the current stall window */
+    Toss toss[MAX_CRITTERS];/* the last toss each made, for the renderer */
     /* Farming counts, for checking that only pours make wheat. */
     long pours, pour_converted, pour_levels, bites, rotted;
     long stocked, laid;     /* water into wells, cells built */
