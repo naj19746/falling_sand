@@ -38,6 +38,12 @@ void config_defaults(Config *c)
     snprintf(c->keyboard, sizeof c->keyboard, "auto");
     c->keyboard_device[0] = '\0';
     c->keyboard_brightness = 1.0f;
+    c->critters = 1;
+    c->critter_max = 24;
+    c->critter_starve_minutes = 40;
+    c->wheat_per_pour = 3;
+    snprintf(c->kana_url, sizeof c->kana_url, "http://127.0.0.1:8080");
+    config_set(c, "pixelorama_config", "~/.local/share/pixelorama/config.ini");
 }
 
 const char *config_default_path(void)
@@ -50,6 +56,14 @@ const char *config_default_path(void)
         snprintf(path, sizeof path, "%s/.config/sandbg/config.ini",
                  getenv("HOME") ? getenv("HOME") : ".");
     return path;
+}
+
+static int parse_str(const char *s, char *out, size_t size)
+{
+    if (strlen(s) >= size)
+        return -1;
+    strcpy(out, s);
+    return 0;
 }
 
 static int parse_int(const char *s, int *out)
@@ -120,6 +134,24 @@ int config_set(Config *c, const char *key, const char *value)
     if (!strcmp(key, "tree_thirst_minutes")) return parse_int(value, &c->tree_thirst_minutes);
     if (!strcmp(key, "drain_overfill"))  return parse_float(value, &c->drain_overfill);
     if (!strcmp(key, "keyboard_brightness")) return parse_float(value, &c->keyboard_brightness);
+    if (!strcmp(key, "critters"))        return parse_bool(value, &c->critters);
+    if (!strcmp(key, "critter_max"))     return parse_int(value, &c->critter_max);
+    if (!strcmp(key, "critter_starve_minutes"))
+        return parse_int(value, &c->critter_starve_minutes);
+    if (!strcmp(key, "wheat_per_pour"))  return parse_int(value, &c->wheat_per_pour);
+    if (!strcmp(key, "kana_url"))
+        return parse_str(value, c->kana_url, sizeof c->kana_url);
+    if (!strcmp(key, "pixelorama_config")) {
+        /* A leading ~ is the home directory, as in the default. */
+        char path[sizeof c->pixelorama_config];
+        const char *home = getenv("HOME");
+        if (value[0] == '~' && (value[1] == '/' || !value[1]) && home) {
+            if ((size_t)snprintf(path, sizeof path, "%s%s", home, value + 1) >= sizeof path)
+                return -1;
+            value = path;
+        }
+        return parse_str(value, c->pixelorama_config, sizeof c->pixelorama_config);
+    }
     if (!strcmp(key, "keyboard")) {
         if (strlen(value) >= sizeof c->keyboard)
             return -1;
@@ -239,6 +271,18 @@ const char *config_validate(const Config *c)
         return "keyboard must be auto, off or preview";
     if (!(c->keyboard_brightness >= 0.0f && c->keyboard_brightness <= 1.0f))
         return "keyboard_brightness must be 0-1";
+    if (c->critter_max < 1 || c->critter_max > 32)
+        return "critter_max must be 1-32";
+    if (c->critter_starve_minutes < 5 || c->critter_starve_minutes > 600)
+        return "critter_starve_minutes must be 5-600";
+    if (c->wheat_per_pour < 1 || c->wheat_per_pour > 7)
+        return "wheat_per_pour must be 1-7";
+    if (c->kana_url[0] && strncmp(c->kana_url, "http://", 7) &&
+        strncmp(c->kana_url, "https://", 8))
+        return "kana_url must start with http:// or https:// (or be empty)";
+    /* It goes into a shell command for curl, inside single quotes. */
+    if (strchr(c->kana_url, '\'') || strchr(c->kana_url, '\\'))
+        return "kana_url can't contain quotes or backslashes";
     if (!ok) {
         snprintf(msg, sizeof msg, "unknown palette '%s' (desert, pastel, neon, mono)",
                  c->palette);

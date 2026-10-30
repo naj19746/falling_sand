@@ -87,6 +87,10 @@ Edit `~/.config/sandbg/config.ini`, then restart with
 | `fill_reset` | 0.6 | Drain when this fraction of the screen is sand |
 | `keyboard` | auto | Keychron LEDs: `auto`, `off` or `preview` |
 | `keyboard_brightness` | 1.0 | Overall LED brightness, 0-1 |
+| `critters` | true | Critters that farm, fetch water and build |
+| `critter_max` | 24 | Most critters alive at once (1-32) |
+| `kana_url` | `http://127.0.0.1:8080` | The kana practice platform; empty turns kana rewards off |
+| `pixelorama_config` | `~/.local/share/pixelorama/config.ini` | Pixelorama's settings; empty turns drawing rewards off |
 
 Any setting can be overridden for a single run with
 `--set key=value`.
@@ -97,7 +101,7 @@ Mouse on the desktop: left-drag adds sand, right-drag adds stone,
 middle-drag erases.
 
 Keys (when the window has focus): `r` resets, `d` drains now, `s` drops a
-seed, `l` strikes lightning, `space` pauses, `q`/`Esc` quits.
+seed, `l` strikes lightning, `c` drops a critter, `space` pauses, `q`/`Esc` quits.
 
 ```
 sandbg --windowed        # run in a normal window, for trying it out
@@ -105,6 +109,7 @@ sandbg --weather         # print the current weather and the rain rate it gives
 sandbg --meter           # live audio level, as the blaster sees it
 sandbg --spotify         # what Spotify is playing, and each finished song
 sandbg --strike          # fire one lightning strike at the running copy
+sandbg --critter         # drop a critter into the running copy
 sandbg --keyboard        # show the Keychron LED interface and keymap status
 sandbg --keyboard-preview  # run with the LED colors drawn in the terminal
 sandbg --profile         # print frame timings every 5 seconds

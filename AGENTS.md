@@ -26,6 +26,8 @@ lock file stops a second desktop copy, but `--windowed` runs alongside it.
 main.c      startup, flags (usage()), config load, main loop, input, pause when covered
 sim.c/.h    the cellular automaton: all cell types, emitters, blaster, drain cycle,
             seeds, lightning, glass, trees, sleeping chunks
+sim_internal.h  helpers shared by sim.c and critter.c (set_cell, rnd, move, ...)
+critter.c   critters: bodies on the grid, food, wheat, homes and wells (see CRITTERS.md)
 render.c/.h draws changed chunks into the X window through MIT-SHM
 x11.c/.h    desktop window properties, the "is the desktop covered" check
 audio.c/.h  PulseAudio loudness of the output (background thread)

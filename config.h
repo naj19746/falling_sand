@@ -28,6 +28,12 @@ typedef struct {
     char  keyboard[16];     /* auto, off or preview */
     char  keyboard_device[64];  /* "" = find the Keychron raw HID interface */
     float keyboard_brightness;  /* 0-1 */
+    int   critters;         /* critters live in the sandbox */
+    int   critter_max;      /* most alive at once */
+    int   critter_starve_minutes;   /* sim minutes from full to starving */
+    int   wheat_per_pour;   /* wheat stock levels one pour adds */
+    char  kana_url[256];    /* kana platform; "" = no kana rewards */
+    char  pixelorama_config[1024];  /* "" = no drawing rewards; ~ expanded */
 } Config;
 
 void config_defaults(Config *c);
