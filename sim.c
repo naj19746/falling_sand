@@ -357,7 +357,8 @@ static void rust_iron(Sim *s)
             continue;
         for (int k = 0; k < tail; k++) {
             int j = s->stack[k];
-            set_cell(s, j % w, j / w, CELL(STONE, CELL_COLOR(s->cells[j])));
+            if (!(CELL_COLOR(s->cells[j]) & SEEDED))
+                set_cell(s, j % w, j / w, CELL(STONE, CELL_COLOR(s->cells[j])));
         }
     }
 }

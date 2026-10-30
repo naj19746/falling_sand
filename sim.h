@@ -37,6 +37,9 @@ enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT, CRITTER,
  * buildings. Everything else that makes stone or iron clears it. */
 #define BUILT             0x80
 
+/* Color bit on iron a critter grew from a seed: it never rusts. */
+#define SEEDED            0x40
+
 /* A wheat cell's color byte: the low bits are how much eating is left in
  * it, 0 to WHEAT_MAX. */
 #define WHEAT_MAX         7
@@ -284,6 +287,8 @@ typedef struct {
     long flung;             /* grains critters flung off ledges */
     long seeds_caught;      /* seeds critters caught */
     long seeded;            /* seeds planted on ledges as iron */
+    uint32_t shower_until[MAX_CRITTERS]; /* a planted seed's shower, by slot */
+    int shower_x[MAX_CRITTERS];          /* its middle column */
     int critters;           /* slots in use */
 } Sim;
 

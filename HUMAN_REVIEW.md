@@ -364,6 +364,50 @@ seed. Every critter then plants one (6-7 per run), but:
 The next levers would be exempting seeded iron from rust and moss from a
 single pour, or arriving with a seed. Those are design calls.
 
+### Follow-up: arrive with a seed, rust-proof seeded iron, planting shower
+
+Asked for next: merge "a seed brings a shower" into seeds making iron.
+Now:
+- Every new critter arrives carrying a seed.
+- Seeded iron never rusts (a `SEEDED` color bit on iron that
+  `rust_iron()` skips).
+- Planting starts a 2-minute shower, 30 drops/min over the 21 columns
+  around the patch.
+
+t16: a critter plants its seed within a minute. Within 3 minutes the
+shower turns all 7 dirt cells on the 9 iron cells to moss. After 40
+drains, the iron and the moss are all still there.
+
+**Realistic matrix (same 8 seeds x 3 days): the first real movement, but
+still no survival.**
+- Every newcomer plants (4-8 per run). Iron builds up through the
+  days: about 18, 36, 54 cells by each evening.
+- There's moss on screen most evenings (0-27 cells), and wheat forms in
+  some runs (up to 31 cells).
+- Farms now hold the fill sometimes: up to 0.8 h of hold over 3 days in
+  typical, and up to 6.5 h with starve240. Before, there was never any.
+- Critters spend about 20% of their time going for food, up from 0, but
+  get 0-2 bites a run.
+
+| Scenario | Runs alive at end | Mean life (h) |
+|---|---|---|
+| typical | 1/8 | 0.8-1.1 |
+| showers | 1/8 | 0.8-1.3 |
+| starve240 | 8/8 | 4.0-10.1 |
+
+**Why they still don't eat** (traced over 4 realistic days): the food
+is there but out of reach. When a critter is going for food, the target
+is on average about 150 cells away. 80-90% of the time it's above the
+critter's head: seeded patches are on floating ledges. Critters land on
+the floor or the pile, and can only get up to a ledge once the pile
+reaches it, by which time the patch is buried. Roughly half the time a
+hungry critter isn't going for food at all: everything it knows of is
+avoided or unreachable.
+
+Next levers: after a drain, drop a critter back in over its own patch
+instead of anywhere on its side; plant on the ledge it's standing on, or
+low ledges first; or let critters climb up to a ledge some other way.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

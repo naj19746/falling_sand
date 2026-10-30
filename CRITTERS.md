@@ -833,7 +833,8 @@ streams don't pour right on top of them.
 `WELL_MAX_ROWS` 5, `TOSS_SHARE` 0.75 (of grains actually poured),
 `TOSS_SECS` 0.75, `LEDGE_PILE` 12, `FOOD_BONUS` 40 (food near a site is
 a bonus, not a requirement), `DIG_IN_PLACE` 24, `SEED_IRON` 9,
-`IRON_BONUS` 40,
+`IRON_BONUS` 40, showers of `SHOWER_RATE` 30 drops/min over `SHOWER_W`
+21 columns for `SHOWER_SECS` 120,
 `CATCH_RANGE` 24 (capped by what it can reach in time), `SPRINT` 2,
 `PLANT_RADIUS` 5, `PLANT_SECS` 20 min, wells 7-21 wide (`WELL_MIN_W`,
 `WELL_MAX_W`), so a home is 15-29 wide. Rain on hut and well roofs runs

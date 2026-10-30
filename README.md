@@ -144,9 +144,11 @@ more sand. They live off the land:
 - **Building:** they mine stone and iron, or press bare dirt into brick,
   and build a well on level ground, near food if they can, then a hut (a
   roof over a floor) beside it. New critters drop in over stone or iron
-  when there is some. A critter that catches a falling seed plants it on
-  a stone ledge, turning a short stretch of it to iron with dirt on top.
-  Otherwise iron comes only from
+  when there is some. Each critter arrives with a seed, and sprints to
+  catch any that falls near it. It plants a seed on a stone ledge,
+  turning a short stretch of it to iron that never rusts, with dirt on
+  top, and a short shower falls there to grow moss on it. Otherwise iron
+  comes only from
   lightning, so from git commits. An all-iron hut keeps its critters, and
   the field and well water joined to it, through the drain; everyone else
   walks off the screen and comes back at the next fill.

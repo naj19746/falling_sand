@@ -115,14 +115,19 @@
  * It only counts sand piled at most LEDGE_PILE deep on the stone. */
 #define LEDGE_PILE  12
 
-/* Seeds: a critter sprints under a falling seed as for a raindrop, ahead
- * of anything but eating, and plants it on the nearest stone ledge: up to
- * SEED_IRON cells along the ledge's top turn to iron, which outlasts the
- * drain, and the sand on them (or the open cell above) to dirt, which the
- * iron holds through the drain too. A home site over iron counts
- * IRON_BONUS cells nearer. */
+/* Seeds: every critter arrives with one, and sprints under a falling one
+ * as for a raindrop, ahead of anything but eating. It plants a seed on
+ * the nearest stone ledge: up to SEED_IRON cells along the ledge's top
+ * turn to iron that never rusts and outlasts the drain, the sand on them
+ * (or the open cell above) to dirt, which the iron holds through the
+ * drain too, and a shower of SHOWER_RATE drops a minute falls over
+ * SHOWER_W columns around it for SHOWER_SECS to grow moss on it. A home
+ * site over iron counts IRON_BONUS cells nearer. */
 #define SEED_IRON   9
 #define IRON_BONUS  SENSE
+#define SHOWER_RATE 30.0f
+#define SHOWER_W    21
+#define SHOWER_SECS 120.0f
 
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
@@ -1621,7 +1626,7 @@ static void plant_seed(Sim *s, int i)
     }
     for (int k = 0; k < n; k++) {
         int x = xs[k], y = ys[k];
-        set_cell(s, x, y, CELL(IRON, (CELL_COLOR(at(s, x, y)) & 0x7F) | BUILT));
+        set_cell(s, x, y, CELL(IRON, (CELL_COLOR(at(s, x, y)) & 0x3F) | SEEDED | BUILT));
         /* The sand piled on it turns to dirt, or a cell of dirt goes on
          * the bare iron. */
         int yy = y - 1;
@@ -1633,7 +1638,22 @@ static void plant_seed(Sim *s, int i)
     c->carry = 0;
     c->fails = 0;
     s->seeded++;
+    s->shower_until[i] = s->frame + (uint32_t)secs(s, SHOWER_SECS);
+    s->shower_x[i] = c->tx;
     end_goal(s, c);
+}
+
+/* Planted seeds' showers: drops at the top of the screen over each. */
+static void showers(Sim *s)
+{
+    float p = SHOWER_RATE / (60.0f * s->steps_per_sec);
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        if (s->frame >= s->shower_until[i] || rndf(s) >= p)
+            continue;
+        int x = s->shower_x[i] - SHOWER_W / 2 + (int)(rnd(s) % SHOWER_W);
+        if (x >= 0 && x < s->w && CELL_TYPE(at(s, x, 0)) == EMPTY)
+            set_cell(s, x, 0, CELL(WATER, RAIN_FRESH | (rnd(s) & 0x3F)));
+    }
 }
 
 /* Tossing can still take away some of what the emitters poured this
@@ -2469,6 +2489,7 @@ void update_critters(Sim *s)
         return;
     if (s->frame % (uint32_t)secs(s, FARM_COUNT_SECS) == 0)
         count_farms(s);
+    showers(s);
     for (int i = 0; i < MAX_CRITTERS; i++)
         if (s->crit[i].state != CR_FREE && s->crit[i].state != CR_AWAY)
             critter_tick(s, i);
@@ -2479,6 +2500,7 @@ void reset_critters(Sim *s)
     memset(s->crit, 0, sizeof s->crit);
     memset(s->home, 0, sizeof s->home);
     memset(s->toss, 0, sizeof s->toss);
+    memset(s->shower_until, 0, sizeof s->shower_until);
     s->farms = 0;
     s->critters = 0;
 }
@@ -2543,6 +2565,7 @@ int sim_add_critter(Sim *s, int kind)
     c->state = CR_FALLING;
     c->face = (rnd(s) & 1) ? 1 : -1;
     c->food = 1.0f;
+    c->carry = CELL(SEED, 0);
     c->home = -1;
     c->next_think = s->frame + (uint32_t)slot;
     s->critters++;

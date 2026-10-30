@@ -76,8 +76,8 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
 - Only a pour in critter.c makes or grows wheat; nothing in sim.c's water
   code knows about it. The one water hook into critter.c is `gutter()`:
   rain landing on a built home roof moves into that home's well.
-- Iron a critter makes from a seed is `BUILT` iron outside any home's
-  plan, so nobody mines it; it rusts like any other iron.
+- Iron a critter makes from a seed is `BUILT | SEEDED` iron outside any
+  home's plan: nobody mines it, and `rust_iron()` skips `SEEDED` cells.
 - Every critter timing goes through `csecs()` (supercharge) except
   falling.
 
