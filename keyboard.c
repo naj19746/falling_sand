@@ -549,12 +549,14 @@ static void scan_colors(Keyboard *k, const Sim *s, uint32_t now, uint32_t prev)
     }
 
     /* How hard it's raining, from the drops falling on screen per column
-     * (scaled to a 270-cell-tall grid): about 0.04 in a drizzle, 0.2 in
-     * light rain, 1 in a downpour. Smoothed so gusts don't flicker. */
+     * (scaled to a 270-cell-tall grid), at the default 60 steps a second:
+     * about 0.015 in a drizzle (120 drops/min), 0.07 in light rain (600),
+     * 0.34 in a downpour (3000). Drops become a glow from about 170 to
+     * 1800 drops/min. Smoothed so gusts don't flicker. */
     float density = (float)drops / (float)k->w * 270.0f / (float)k->h;
     k->rain_level += (density - k->rain_level) * (1.0f - expf(-dt / 1.5f));
     float lvl = k->rain_level > 1e-4f ? k->rain_level : 1e-4f;
-    float steady = (log10f(lvl) - log10f(0.06f)) / (log10f(0.6f) - log10f(0.06f));
+    float steady = (log10f(lvl) - log10f(0.02f)) / (log10f(0.2f) - log10f(0.02f));
     steady = steady < 0.0f ? 0.0f : steady > 1.0f ? 1.0f : steady;
     steady = steady * steady * (3.0f - 2.0f * steady);
 
