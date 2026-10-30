@@ -279,6 +279,7 @@ typedef struct {
     long planted;           /* seeds critters planted */
     long caught;            /* drops critters caught */
     long guttered;          /* drops run off roofs into wells */
+    long flung;             /* grains critters flung off ledges */
     int critters;           /* slots in use */
 } Sim;
 

@@ -91,7 +91,7 @@
  * always drains in the end. Homes this close to an edge are preferred. */
 #define TOSS_RANGE  30
 #define TOSS_SCOOP  3
-#define TOSS_SECS   3.0f
+#define TOSS_SECS   0.75f
 #define TOSS_SHARE  0.75f
 #define EDGE_BONUS  20
 
@@ -106,6 +106,12 @@
 #define CATCH_RANGE 24
 #define SPRINT      2
 
+/* Ledges: a critter with no home clears the sand off the nearest stone
+ * ledge, a scoop at a time as when tossing, flinging it past the nearer
+ * end of the ledge. Bare stone doesn't swallow rain the way sand does.
+ * It only counts sand piled at most LEDGE_PILE deep on the stone. */
+#define LEDGE_PILE  12
+
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
  * most once every PLANT_SECS. Dirt isn't food: it still takes water to
@@ -118,7 +124,7 @@
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -1442,6 +1448,90 @@ static int rank_sand(const Sim *s, int x, int y)
     return (t == SAND || t == DEBRIS || t == SHARD) && open_above(s, x, y) ? 0 : -1;
 }
 
+/* The natural stone under the loose pile at (x, y), within LEDGE_PILE:
+ * the y of its top, or -1. */
+static int ledge_under(const Sim *s, int x, int y)
+{
+    for (int k = 0; k <= LEDGE_PILE && y + k < s->h; k++) {
+        uint16_t v = at(s, x, y + k);
+        if (CELL_TYPE(v) == STONE && !built(v))
+            return y + k;
+        if (!FALLS(CELL_TYPE(v)) || MOSSY(CELL_TYPE(v)) || CELL_TYPE(v) == DIRT)
+            return -1;
+    }
+    return -1;
+}
+
+static int rank_ledge(const Sim *s, int x, int y)
+{
+    return rank_sand(s, x, y) == 0 && ledge_under(s, x, y) >= 0 ? 0 : -1;
+}
+
+/* Follow the ledge whose top is at (x, y) one way (d) to its end; gives
+ * the first column past it and the top row at the end. */
+static int ledge_end(const Sim *s, int x, int y, int d, int *ey)
+{
+    for (;;) {
+        int nx = x + d, ny = -1;
+        if (nx < 0 || nx >= s->w)
+            break;
+        for (int yy = y - 1; yy <= y + 1 && ny < 0; yy++)
+            if (yy > 0 && yy < s->h && CELL_TYPE(at(s, nx, yy)) == STONE &&
+                !built(at(s, nx, yy)) && CELL_TYPE(at(s, nx, yy - 1)) != STONE)
+                ny = yy;
+        if (ny < 0)
+            break;
+        x = nx;
+        y = ny;
+    }
+    *ey = y;
+    return x + d;
+}
+
+/* Scoop the sand at the goal off the ledge and fling it past the nearer
+ * end, where it falls. */
+static void clear_ledge(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    c->state = CR_DIG;
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, TOSS_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    int top = ledge_under(s, c->tx, c->ty), ly, ry;
+    if (top < 0) {
+        end_goal(s, c);
+        return;
+    }
+    int lx = ledge_end(s, c->tx, top, -1, &ly), rx = ledge_end(s, c->tx, top, 1, &ry);
+    /* The nearer end, unless that's off the screen. */
+    int left = rx > s->w - 2 || (lx >= 1 && c->tx - lx <= rx - c->tx);
+    int fx = left ? lx - 1 : rx + 1, fy = (left ? ly : ry) - 2;
+    int want = c->kind == CR_LARGE ? TOSS_SCOOP : 1, n = 0;
+    for (int dy = 0; dy <= 1 && n < want; dy++)
+        for (int dx = -1; dx <= 1 && n < want; dx++) {
+            int x = c->tx + dx, y = c->ty + dy;
+            if (x < 0 || x >= s->w || y >= s->h || rank_ledge(s, x, y) < 0)
+                continue;
+            /* Where it lands: the first open cell up from past the end. */
+            int ty = fy;
+            while (ty > 0 && (fx < 0 || fx >= s->w || CELL_TYPE(at(s, fx, ty)) != EMPTY))
+                ty--;
+            if (ty <= 0 || fx < 0 || fx >= s->w)
+                break;
+            uint16_t v = at(s, x, y);
+            set_cell(s, x, y, CELL(EMPTY, 0));
+            set_cell(s, fx, ty, v);
+            s->flung++;
+            n++;
+        }
+    if (n)
+        c->fails = 0;
+    end_goal(s, c);
+}
+
 /* Tossing can still take away some of what the emitters poured this
  * stall window. */
 static int toss_room(const Sim *s)
@@ -1783,6 +1873,12 @@ static void think(Sim *s, int i)
         return;
     }
 
+    /* No home: clear the sand off the nearest ledge. */
+    if (!h && find_best(s, i, rank_ledge, &fx, &fy)) {
+        set_goal(s, c, G_LEDGE, fx, fy);
+        return;
+    }
+
     /* Rain falling nearby: run under it. */
     int dx;
     if (c->thirsty && !c->carry && falling_drop(s, c, &dx)) {
@@ -2032,6 +2128,10 @@ static void critter_tick(Sim *s, int i)
     case G_TOSS:
         if (approach(s, i))
             toss(s, i);
+        break;
+    case G_LEDGE:
+        if (approach(s, i))
+            clear_ledge(s, i);
         break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,

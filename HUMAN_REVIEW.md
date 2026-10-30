@@ -247,6 +247,38 @@ moss within 20 cells, and the 9-minute fill buries moss first. So these
 changes only pay off once something like option A gives critters
 ground that lasts: a starting patch, or relaxing the site's food rule.
 
+### Follow-up: clearing ledges, sand handled 4x faster
+
+Asked for next: critters clear the sand off the nearest stone ledge, and
+move sand four times as fast.
+
+- `TOSS_SECS` 3 s -> 0.75 s. This also speeds up tossing off the screen
+  edge: 12 charged large tossers now hold the fill 87 min (was 84), still
+  ending by overfill.
+- A critter with no home scoops sand lying on natural (unbuilt) stone,
+  at most 12 deep, and flings it past the nearer end of that ledge. The
+  sand reappears there at once as falling grains; there's no arc drawn.
+- Alone on a bare test ledge with 843 grains on it, a small critter
+  clears it in about 23 min and a large one in about 17 min. That's about
+  35 and 56 grains a minute: walking to each scoop and the once-a-second
+  think limit it, not the throw time. Rain then pools on the bare stone:
+  93-105 cells from 600 drops in 10 min.
+- Before building, I measured ledges with no critters: within 1 minute
+  of a fill starting, 89-98% of ledge columns are under sand, and from
+  about 2 minutes ~90% are more than 3 deep. The sand streams (about 140
+  grains a second together) sweep across the ledges.
+
+**Realistic matrix (same 8 seeds x 3 days): no change.** Critters now
+spend about 30% of their time clearing ledges and fling 2,400-7,000
+grains a run (22,000-35,000 with starve240). typical and showers: 0/8
+alive, mean life 0.9-1.0 h. starve240: 6/8, 5.3-6.6 h. Across all 24
+runs, 3 bites were eaten (one showers run) and no home was ever planned.
+Ledges refill as fast as they're cleared and crumble at every drain, so
+nothing stays put long enough to farm.
+
+`git revert` of this commit takes both changes back out if you don't
+want them.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

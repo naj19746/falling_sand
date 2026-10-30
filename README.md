@@ -148,7 +148,9 @@ more sand. They live off the land:
   walks off the screen and comes back at the next fill.
 - **Holding the fill:** a home with wheat holds the fill like a living
   tree, and critters near a side edge toss sand off the screen to make
-  the hold last longer, up to about four times as long.
+  the hold last longer, up to about four times as long. A critter with
+  no home clears the sand off the nearest stone ledge, flinging it past
+  the ledge's end.
 - **Lightning:** a strike near a critter supercharges it for ten minutes:
   three times as fast at everything.
 
