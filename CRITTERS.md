@@ -836,7 +836,8 @@ a bonus, not a requirement), `DIG_IN_PLACE` 24, `SEED_IRON` 9,
 `IRON_BONUS` 40, showers of `SHOWER_RATE` 30 drops/min over `SHOWER_W`
 21 columns for `SHOWER_SECS` 120, `PATCH_RANGE` 12, `STACK_SECS` 1, sand bricks crumble after
 `SAND_BRICK_SECS` 20 min,
-homes are a `PATCH_WELL_W` 3 well on the patch, critters hop up to
+homes are a `PATCH_WELL_W` 3 well on the patch, idle critters press
+sand into dirt (`IDLE_PRESS` 0.7 of the time, a grain per `PRESS_SECS` 30), critters hop up to
 `JUMP` 3 cells and stair steps rise `STAIR_RISE` 3,
 `CATCH_RANGE` 24 (capped by what it can reach in time), `SPRINT` 2,
 `PLANT_RADIUS` 5, `PLANT_SECS` 20 min, wells 7-21 wide (`WELL_MIN_W`,

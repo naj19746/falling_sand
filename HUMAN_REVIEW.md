@@ -573,6 +573,44 @@ noise.
 Still no well has held water, and home cells laid stay at 0-17 a run.
 t19 still stops at 7 of 9 cells.
 
+### Follow-up: pressing sand into dirt
+
+Asked for: critters slowly turn sand into dirt and build with it, as an
+idle activity: 70% pressing, 30% strolling.
+
+- With nothing else to do on its patch, a critter presses a grain of sand
+  in reach into dirt (`IDLE_PRESS` 0.7), one every 30 seconds of sim time
+  (`PRESS_SECS`). Otherwise it strolls as before. It skips sand in a
+  home's plan.
+- Bare dirt counts as building material as good as fallen debris. Dirt
+  right next to a home is fine to use now; dirt in a plan cell, under
+  moss or on iron isn't.
+- **Critters no longer mine the stone of ledges at all.** In t19 the
+  critter kept fetching stone from the ledge beside its well, holed the
+  ledge, fell through and never got back. Building material is now
+  fallen debris and dirt; large critters still mine iron. (This removed
+  the "near a patch" mining rule, which isn't needed any more.)
+- **t19 passes now.** The newcomer plants, plans a well on its patch, and
+  finishes it in 25 minutes, deepening it to 5 rows. In that test world
+  it built with dirt from the ground nearby, not pressed dirt. After a
+  drain the well (15 cells), its 5 cells of water and the critter are
+  all still there.
+
+**All step tests pass.**
+
+**Matrix (8 seeds x 3 days):** pressing happens (4-238 grains a run,
+89-585 with starve240), but homes still barely get built, and survival
+is about the same.
+
+| Scenario | Runs alive at end | Mean life (avg) | Home cells laid | Grains pressed |
+|---|---|---|---|---|
+| typical | 2/8 | 1.1-2.0 h (1.6) | 0-6 | 4-194 |
+| nocommit | 1/8 | 1.2-3.3 h (2.2) | 1-6 | 12-238 |
+| showers | 2/8 | 1.5-3.1 h (1.9) | 0-6 | 6-136 |
+| starve240 | 8/8 | 3.2-10.8 h (6.0) | 5-24 | 89-585 |
+
+No well held water by any evening. One starve240 run guttered 11 drops.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

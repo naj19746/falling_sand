@@ -136,6 +136,12 @@
 #define PATCH_RANGE 12
 #define STACK_SECS  1.0f
 #define CLIMB_PATIENCE (20 * STUCK_MOVES)
+
+/* Idle on its patch, a critter presses sand into dirt (IDLE_PRESS of the
+ * time; else it strolls), a grain every PRESS_SECS. The dirt is brick for
+ * its home, and field where it's left. */
+#define IDLE_PRESS  0.7f
+#define PRESS_SECS  30.0f
 #define STAIR_RISE  JUMP
 
 /* Planting: a critter with no earth within SENSE plants a seed it
@@ -150,7 +156,7 @@
 #define IRON_LOOK_SECS 10.0f
 
 enum { G_NONE, G_WANDER, G_EAT, G_DIE, G_FARM, G_STOCK, G_BUILD, G_CLEAR,
-       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE, G_SEED, G_PLANT, G_PATCH };
+       G_DUMP, G_SWAP, G_DETOUR, G_SHELTER, G_LEAVE, G_TOSS, G_CATCH, G_LEDGE, G_SEED, G_PLANT, G_PATCH, G_PRESS };
 
 /* What a home's plan wants in a cell: nothing in particular, built stone
  * or iron, open (empty), or well water (empty or water). */
@@ -1051,30 +1057,31 @@ static int field_junk(const Sim *s, const Home *h, int *jx, int *jy)
     return 0;
 }
 
-/* Building material: iron first (large critters only), then stone, then
- * fallen debris. Never anything already built, or the ground under a
- * home. */
-/* Within 2 cells of seeded iron: the ledge holding up a patch. */
-static int near_patch(const Sim *s, int x, int y)
+/* In any home's plan. */
+static int in_plan(const Sim *s, int x, int y)
 {
-    for (int yy = y - 2; yy <= y + 2; yy++)
-        for (int xx = x - 2; xx <= x + 2; xx++)
-            if (xx >= 0 && xx < s->w && yy >= 0 && yy < s->h &&
-                CELL_TYPE(at(s, xx, yy)) == IRON && (CELL_COLOR(at(s, xx, yy)) & SEEDED))
-                return 1;
+    for (int k = 0; k < MAX_HOMES; k++)
+        if (s->home[k].used && plan_at(&s->home[k], x, y) != P_NONE)
+            return 1;
     return 0;
 }
 
+/* Building material besides iron (large critters only, find_iron()):
+ * fallen debris, and bare dirt, which critters press from sand. Never
+ * anything already built, or the ground under a home. */
 static int rank_stone(const Sim *s, int x, int y)
 {
     uint16_t v = at(s, x, y);
     int t = CELL_TYPE(v);
-    if ((t == STONE && !(CELL_COLOR(v) & BUILT)) || t == DEBRIS)
-        return near_home(s, x, y) || (t == STONE && near_patch(s, x, y)) ? -1 : 1;
-    /* Bare dry dirt pressed into brick, when there's no stone. Not dirt
-     * under moss: that's a field. */
+    /* Loose debris; not the stone of a ledge, which they'd only hole and
+     * fall through. */
+    if (t == DEBRIS)
+        return near_home(s, x, y) ? -1 : 1;
+    /* Bare dry dirt pressed into brick, as good as stone: right by a home
+     * it's what critters pressed for it. Not dirt under moss, or on iron:
+     * that's a field. Not dirt in a home's plan, either. */
     if (t == DIRT && open_above(s, x, y) && (y + 1 >= s->h || CELL_TYPE(at(s, x, y + 1)) != IRON))
-        return near_home(s, x, y) ? -1 : 2;
+        return in_plan(s, x, y) ? -1 : 1;
     return -1;
 }
 
@@ -1726,6 +1733,39 @@ static int climb_to(Sim *s, int i, int px, int py)
     return 0;
 }
 
+/* A grain of sand in reach to press, not in a home's plan. */
+static int press_spot(const Sim *s, int i, int *fx, int *fy)
+{
+    const Critter *c = &s->crit[i];
+    for (int y = c->y + 1; y >= c->y - c->h; y--)
+        for (int x = c->x - 1; x <= c->x + c->w; x++)
+            if (x >= 0 && x < s->w && y >= 0 && y < s->h &&
+                CELL_TYPE(at(s, x, y)) == SAND && !in_plan(s, x, y)) {
+                *fx = x;
+                *fy = y;
+                return 1;
+            }
+    return 0;
+}
+
+/* Pressing the grain at the goal into dirt, slowly. */
+static void press(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    c->state = CR_DIG;
+    if (!c->work_until) {
+        c->work_until = s->frame + csecs(s, c, PRESS_SECS);
+        return;
+    }
+    if (s->frame < c->work_until)
+        return;
+    if (CELL_TYPE(at(s, c->tx, c->ty)) == SAND && in_reach(c, c->tx, c->ty)) {
+        set_cell(s, c->tx, c->ty, CELL(DIRT, rnd(s) & 0xFF));
+        s->pressed++;
+    }
+    end_goal(s, c);
+}
+
 /* Back to its patch. */
 static void go_patch(Sim *s, int i)
 {
@@ -2272,6 +2312,13 @@ static void think(Sim *s, int i)
 stroll:
     if (c->goal != G_NONE || s->frame < c->work_until)
         return;
+    /* On its patch with nothing to do: press sand into dirt, mostly. */
+    if (!c->carry && patch_ok(s, c) && c->y < c->patch_y &&
+        abs(c->x - c->patch_x) <= PATCH_RANGE && rndf(s) < IDLE_PRESS &&
+        press_spot(s, i, &fx, &fy)) {
+        set_goal(s, c, G_PRESS, fx, fy);
+        return;
+    }
     /* Stroll about near where it lives, so it doesn't drift away from
      * its food. */
     int tx = c->ax + (int)(rnd(s) % (2 * WANDER + 1)) - WANDER;
@@ -2562,6 +2609,9 @@ static void critter_tick(Sim *s, int i)
     }
     case G_PATCH:
         go_patch(s, i);
+        break;
+    case G_PRESS:
+        press(s, i);
         break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,

@@ -141,8 +141,11 @@ more sand. They live off the land:
   covered well, where it never dries up. Rain on a hut's or well's roof
   runs down a gutter into the well, so wells are built as wide as the
   ground allows.
-- **Building:** they mine stone and iron, or press bare dirt into brick,
-  and build a small well on their patch's iron. Built on iron, it comes
+- **Building:** with nothing else to do on its patch, a critter usually
+  presses sand into dirt, a grain every half minute (otherwise it
+  strolls). Dirt and fallen debris are its bricks, and large critters
+  mine iron; nobody digs into a ledge's stone. They build a small well on
+  their patch's iron. Built on iron, it comes
   through the drain with its water. New critters drop in over stone or
   iron when there is some. Each critter arrives with a seed, and sprints to
   catch any that falls near it. It plants a seed on a stone ledge,

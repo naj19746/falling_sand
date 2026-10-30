@@ -300,6 +300,7 @@ typedef struct {
     long seeds_caught;      /* seeds critters caught */
     long seeded;            /* seeds planted on ledges as iron */
     long stacked;           /* cells critters stacked to climb */
+    long pressed;           /* grains critters pressed into dirt */
     uint32_t shower_until[MAX_CRITTERS]; /* a planted seed's shower, by slot */
     int shower_x[MAX_CRITTERS];          /* its middle column */
     int critters;           /* slots in use */
