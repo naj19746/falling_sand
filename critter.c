@@ -67,16 +67,16 @@
 #define FIELD_RESERVE_HOURS 2.0f
 #define POUR_SECS   1.0f
 
-/* Homes: other homes stay HOME_RADIUS clear of one, and junk cleared off
- * one is dumped past it. A well starts WELL_ROWS deep and is deepened up
- * to WELL_MAX_ROWS once the rest is built. It's as wide as the level
- * ground allows, from WELL_MIN_W to WELL_MAX_W with its walls: its roof
- * and the hut's catch rain for it, so wider is wetter. */
+/* Homes: junk cleared off one is dumped past HOME_RADIUS. A critter's
+ * home is a small well, PATCH_WELL_W wide with its walls, on the iron of
+ * its patch, which is its floor: built on iron, it outlasts the drain. A
+ * well starts WELL_ROWS deep and is deepened up to WELL_MAX_ROWS once
+ * it's built. (A home can also have a hut beside its well, HUT_GAP
+ * columns away; only the tests make those now.) */
 #define HOME_RADIUS   12
 #define WELL_ROWS     2
 #define WELL_MAX_ROWS 5
-#define WELL_MIN_W    7
-#define WELL_MAX_W    21
+#define PATCH_WELL_W  3
 #define HUT_W         5
 #define HUT_GAP       3
 #define HOME_W(ww)    (HUT_W + HUT_GAP + (ww))
@@ -90,13 +90,11 @@
  * side edge throw sand off the screen, TOSS_SCOOP cells at a time for a
  * large critter (one for a small), a throw every TOSS_SECS. Tossing can
  * offset at most TOSS_SHARE of what the emitters pour, so the screen
- * always drains in the end. Homes this close to an edge are preferred. */
+ * always drains in the end. */
 #define TOSS_RANGE  30
 #define TOSS_SCOOP  3
 #define TOSS_SECS   0.75f
 #define TOSS_SHARE  0.75f
-#define EDGE_BONUS  20
-#define FOOD_BONUS  SENSE
 
 /* Farms are counted about once a second. */
 #define FARM_COUNT_SECS 1.0f
@@ -121,10 +119,8 @@
  * turn to iron that never rusts and outlasts the drain, the sand on them
  * (or the open cell above) to dirt, which the iron holds through the
  * drain too, and a shower of SHOWER_RATE drops a minute falls over
- * SHOWER_W columns around it for SHOWER_SECS to grow moss on it. A home
- * site over iron counts IRON_BONUS cells nearer. */
+ * SHOWER_W columns around it for SHOWER_SECS to grow moss on it. */
 #define SEED_IRON   9
-#define IRON_BONUS  SENSE
 #define SHOWER_RATE 30.0f
 #define SHOWER_W    21
 #define SHOWER_SECS 120.0f
@@ -135,6 +131,7 @@
  * every STACK_SECS or so, then climbs them across. */
 #define PATCH_RANGE 12
 #define STACK_SECS  1.0f
+#define CLIMB_PATIENCE (20 * STUCK_MOVES)
 
 /* Planting: a critter with no earth within SENSE plants a seed it
  * carries, turning the sand within PLANT_RADIUS of its feet to dirt, at
@@ -719,12 +716,12 @@ static int hut_x(const Home *h)
 
 static int well_x(const Home *h)
 {
-    return h->dir > 0 ? h->x + HUT_W + HUT_GAP : h->x;
+    return h->dir > 0 && h->hut ? h->x + HUT_W + HUT_GAP : h->x;
 }
 
 static int home_w(const Home *h)
 {
-    return HOME_W(h->ww);
+    return h->hut ? HOME_W(h->ww) : h->ww;
 }
 
 static int well_top(const Home *h)
@@ -1026,12 +1023,23 @@ static int field_junk(const Sim *s, const Home *h, int *jx, int *jy)
 /* Building material: iron first (large critters only), then stone, then
  * fallen debris. Never anything already built, or the ground under a
  * home. */
+/* Within 2 cells of seeded iron: the ledge holding up a patch. */
+static int near_patch(const Sim *s, int x, int y)
+{
+    for (int yy = y - 2; yy <= y + 2; yy++)
+        for (int xx = x - 2; xx <= x + 2; xx++)
+            if (xx >= 0 && xx < s->w && yy >= 0 && yy < s->h &&
+                CELL_TYPE(at(s, xx, yy)) == IRON && (CELL_COLOR(at(s, xx, yy)) & SEEDED))
+                return 1;
+    return 0;
+}
+
 static int rank_stone(const Sim *s, int x, int y)
 {
     uint16_t v = at(s, x, y);
     int t = CELL_TYPE(v);
     if ((t == STONE && !(CELL_COLOR(v) & BUILT)) || t == DEBRIS)
-        return near_home(s, x, y) ? -1 : 1;
+        return near_home(s, x, y) || (t == STONE && near_patch(s, x, y)) ? -1 : 1;
     /* Bare dry dirt pressed into brick, when there's no stone. Not dirt
      * under moss: that's a field. */
     if (t == DIRT && open_above(s, x, y) && (y + 1 >= s->h || CELL_TYPE(at(s, x, y + 1)) != IRON))
@@ -1153,108 +1161,76 @@ static int residents(const Sim *s, int k, float *eat_per_hour)
     return n;
 }
 
-/* A spot for a new home with a well ww wide near critter c: within
- * SENSE, the ground level to within a cell over all its columns, room
- * above it for the tallest well, and clear of other homes. Nearer is
- * better, and food within SENSE / 2 counts for FOOD_BONUS cells. */
-static int find_site_w(Sim *s, int i, int ww, Home *out)
+static int patch_ok(const Sim *s, const Critter *c);
+
+/* A home for critter c on its patch: PATCH_WELL_W columns of its iron on
+ * one row, toward an end of the patch to leave the middle for the field,
+ * with room above for the deepest well and clear of other homes. */
+static int patch_site(const Sim *s, const Critter *c, Home *out)
 {
-    Critter *c = &s->crit[i];
-    int best = 1 << 30, hw = HOME_W(ww);
-    for (int x0 = c->x - SENSE; x0 <= c->x + SENSE; x0++) {
-        if (x0 < 1 || x0 + hw >= s->w - 1)
+    int best = -1, bf = 0;
+    for (int x0 = c->patch_x - SEED_IRON; x0 <= c->patch_x + SEED_IRON; x0++) {
+        if (x0 < 0 || x0 + PATCH_WELL_W > s->w)
             continue;
-        int lo = s->h, hi = -1, ok = 1;
-        for (int x = x0; x < x0 + hw; x++) {
-            int g = ground_y(s, x);
-            if (g < lo) lo = g;
-            if (g > hi) hi = g;
+        int f = -1, ok = 1;
+        for (int y = c->patch_y - 2; y <= c->patch_y + 2 && f < 0; y++)
+            if (y > 0 && y < s->h && CELL_TYPE(at(s, x0, y)) == IRON &&
+                (CELL_COLOR(at(s, x0, y)) & SEEDED))
+                f = y;
+        if (f - WELL_MAX_ROWS - 1 < 0)
+            continue;
+        for (int x = x0; x < x0 + PATCH_WELL_W && ok; x++) {
+            uint16_t v = at(s, x, f);
+            ok = CELL_TYPE(v) == IRON && (CELL_COLOR(v) & SEEDED);
+            for (int y = f - WELL_MAX_ROWS - 1; y < f && ok; y++) {
+                int t = CELL_TYPE(at(s, x, y));
+                ok = t == EMPTY || LOOSE(t) || EARTH(t) || t == CRITTER || built(at(s, x, y));
+            }
         }
-        if (hi - lo > 2)
-            continue;
-        int f = (lo + hi) / 2;
-        if (lo + 1 == hi)
-            f = hi;
-        f -= 1;             /* floors sit on the ground */
-        if (f - WELL_MAX_ROWS - 2 < 0 || f >= s->h)
-            continue;
         for (int k = 0; k < MAX_HOMES && ok; k++) {
             const Home *h = &s->home[k];
-            if (h->used && x0 < h->x + home_w(h) + HOME_RADIUS &&
-                h->x < x0 + hw + HOME_RADIUS)
-                ok = abs(h->y - f) > 2 * HOME_RADIUS;
+            ok = !h->used || x0 + PATCH_WELL_W <= h->x || x0 >= h->x + home_w(h) ||
+                 abs(h->y - f) > WELL_MAX_ROWS + 2;
         }
-        /* Nothing static but stone and iron in the way. */
-        for (int y = f - 5; y <= f && ok; y++)
-            for (int x = x0; x < x0 + hw && ok; x++) {
-                int t = CELL_TYPE(at(s, x, y));
-                ok = t == EMPTY || LOOSE(t) || t == STONE || t == IRON || t == CRITTER;
-            }
-        if (!ok)
-            continue;
-        int d = abs(x0 + hw / 2 - c->x) + abs(f - c->y);
-        if (x0 < TOSS_RANGE || x0 + hw > s->w - TOSS_RANGE)
-            d -= EDGE_BONUS;
-        /* Iron under it keeps it (and its field) through the drain. */
-        int iron = 0;
-        for (int x = x0; x < x0 + hw && !iron && f + 1 < s->h; x++)
-            iron = CELL_TYPE(at(s, x, f + 1)) == IRON || CELL_TYPE(at(s, x, f)) == IRON;
-        if (iron)
-            d -= IRON_BONUS;
-        if (d - FOOD_BONUS >= best)
-            continue;
-        /* Food near the middle of it makes it better. */
-        int food = 0;
-        for (int y = f - SENSE / 2; y <= f + SENSE / 2 && !food; y++)
-            for (int x = x0 - SENSE / 2; x <= x0 + hw + SENSE / 2 && !food; x++)
-                food = x >= 0 && x < s->w && y >= 0 && y < s->h &&
-                       MOSSY(CELL_TYPE(at(s, x, y)));
-        if (food)
-            d -= FOOD_BONUS;
-        if (d >= best)
-            continue;
-        best = d;
-        memset(out, 0, sizeof *out);
-        out->used = 1;
-        out->x = x0;
-        out->y = f;
-        out->rows = WELL_ROWS;
-        out->ww = ww;
-        /* The well goes on the side nearer the food, the hut away. */
-        out->dir = c->ax >= x0 + hw / 2 ? 1 : -1;
-        well_rect(out);
+        if (ok && (best < 0 || abs(x0 + 1 - c->patch_x) > abs(best + 1 - c->patch_x))) {
+            best = x0;
+            bf = f;
+        }
     }
-    return best < (1 << 30);
+    if (best < 0)
+        return 0;
+    memset(out, 0, sizeof *out);
+    out->used = 1;
+    out->x = best;
+    out->y = bf;
+    out->dir = -1;
+    out->rows = WELL_ROWS;
+    out->ww = PATCH_WELL_W;
+    well_rect(out);
+    return 1;
 }
 
-/* The widest well that has a site. */
-static int find_site(Sim *s, int i, Home *out)
-{
-    for (int ww = WELL_MAX_W; ww >= WELL_MIN_W; ww -= 2)
-        if (find_site_w(s, i, ww, out))
-            return 1;
-    return 0;
-}
-
-/* Join the nearest home within SENSE, or plan a new one. */
+/* With a patch: join a home on it, or plan one there. Without one: join
+ * the nearest home within SENSE. */
 static int settle(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
-    int best = -1, bd = SENSE + 1;
+    int mine = patch_ok(s, c), best = -1, bd = SENSE + 1;
     for (int k = 0; k < MAX_HOMES; k++) {
         const Home *h = &s->home[k];
         if (!h->used)
             continue;
-        int d = abs(h->x + home_w(h) / 2 - c->x) + abs(h->y - c->y);
-        if (d < bd) {
+        int d = mine ? abs(h->x + home_w(h) / 2 - c->patch_x) + abs(h->y - c->patch_y)
+                     : abs(h->x + home_w(h) / 2 - c->x) + abs(h->y - c->y);
+        if (d < bd && (!mine || d <= SEED_IRON)) {
             bd = d;
             best = k;
         }
     }
-    if (best < 0) {
+    if (best < 0 && mine) {
         Home site;
         for (int k = 0; k < MAX_HOMES && best < 0; k++)
-            if (!s->home[k].used && find_site(s, i, &site)) {
+            if (!s->home[k].used && patch_site(s, c, &site)) {
                 s->home[k] = site;
                 best = k;
             }
@@ -1262,7 +1238,8 @@ static int settle(Sim *s, int i)
     if (best < 0)
         return 0;
     c->home = best;
-    c->ax = hut_x(&s->home[best]) + 2;
+    if (!mine)
+        c->ax = well_x(&s->home[best]) + s->home[best].ww / 2;
     return 1;
 }
 
@@ -1409,6 +1386,31 @@ static int fetch_water(Sim *s, Critter *c)
 }
 
 /* Farming: fetch a water cell, carry it to the field, pour it. */
+/* Where to pour: with a patch, only on it, up on its ledge (anywhere else
+ * it would walk off the ledge to water it); else the best in sight. */
+static int find_pour(Sim *s, int i, int *fx, int *fy)
+{
+    Critter *c = &s->crit[i];
+    if (!patch_ok(s, c))
+        return find_best(s, i, rank_pour, fx, fy);
+    int best = 1 << 30;
+    for (int y = c->patch_y - LEDGE_PILE; y < c->patch_y; y++)
+        for (int x = c->patch_x - SEED_IRON; x <= c->patch_x + SEED_IRON; x++) {
+            if (x < 0 || x >= s->w || y < 0)
+                continue;
+            int r = rank_pour(s, x, y);
+            if (r < 0)
+                continue;
+            int score = r * 1024 + dist(c, x, y);
+            if (score >= best || avoided(s, c, x, y) || !exposed(s, i, x, y))
+                continue;
+            best = score;
+            *fx = x;
+            *fy = y;
+        }
+    return best < (1 << 30);
+}
+
 static void farm(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
@@ -1418,7 +1420,7 @@ static void farm(Sim *s, int i)
             end_goal(s, c);
             return;
         }
-        if (find_best(s, i, rank_pour, &fx, &fy)) {
+        if (find_pour(s, i, &fx, &fy)) {
             set_goal(s, c, G_FARM, fx, fy);
             c->state = CR_CARRY;
         } else {
@@ -1491,6 +1493,12 @@ static void build(Sim *s, int i)
     }
     c->state = CR_BUILD;
     Home *h = c->home >= 0 ? &s->home[c->home] : NULL;
+    /* Standing where it goes: step aside first. */
+    if (own(s, i, c->tx, c->ty)) {
+        if (!step_side(s, i, c->tx > c->x ? -1 : 1) && !step_side(s, i, c->tx > c->x ? 1 : -1))
+            end_goal(s, c);
+        return;
+    }
     if (t != EMPTY || !h || plan_at(h, c->tx, c->ty) != P_WALL ||
         (c->ty == well_top(h) && critter_in(s, h->wx0, h->wy0, h->wx1, h->wy1))) {
         end_goal(s, c);
@@ -1590,27 +1598,37 @@ static int grain_in_reach(const Sim *s, int i, int skip, int *gx, int *gy)
     return 0;
 }
 
-/* Back to its patch. Up level with it, it walks across. Below a floating
- * ledge, it builds stairs of brick from the nearer end down and out to
- * the ground: step k is k cells out and k cells down from the end of the
- * ledge's top, floating like the ledge. It lays them from the bottom up,
- * a grain of sand fetched for each, standing on the step below. */
-static void go_patch(Sim *s, int i)
+/* Getting nearer (px, py), or laying a step, is progress; CLIMB_PATIENCE
+ * moves without any, it gives up. Fetching sand for the stairs takes it
+ * away and back, so it's patient. */
+static void climb_progress(Sim *s, Critter *c, int px, int py)
+{
+    int d = dist(c, px, py);
+    if (d < c->best) {
+        c->best = d;
+        c->stuck = 0;
+    } else if (++c->stuck >= CLIMB_PATIENCE) {
+        fail_goal(s, c);
+    }
+}
+
+/* Toward (px, py) on the top of a ledge. Up level with it, it walks
+ * across. Below a floating ledge, it builds stairs of brick from the
+ * nearer end down and out to the ground: step k is k cells out and k
+ * cells down from the end of the ledge's top, floating like the ledge.
+ * It lays them from the bottom up, a grain of sand fetched for each,
+ * standing on the step below. Returns 1 once it's there. */
+static int climb_to(Sim *s, int i, int px, int py)
 {
     Critter *c = &s->crit[i];
-    if (!patch_ok(s, c)) {
-        c->has_patch = 0;
-        end_goal(s, c);
-        return;
-    }
     if (s->frame < c->work_until)
-        return;
-    int px = c->patch_x, py = c->patch_y;
+        return 0;
     if (c->y < py) {
-        if (abs(c->x - px) <= 2 || !step_side(s, i, px < c->x ? -1 : 1))
-            if (abs(c->x - px) <= 2 || ++c->stuck >= STUCK_MOVES)
-                end_goal(s, c);
-        return;
+        if (abs(c->x - px) <= 2)
+            return 1;
+        if (!step_side(s, i, px < c->x ? -1 : 1) && ++c->stuck >= STUCK_MOVES)
+            end_goal(s, c);
+        return 0;
     }
     int ly, ry, lx = ledge_end(s, px, py, -1, &ly), rx = ledge_end(s, px, py, 1, &ry);
     int left = rx >= s->w || (lx >= 0 && abs(c->x - lx) <= abs(c->x - rx));
@@ -1623,19 +1641,18 @@ static void go_patch(Sim *s, int i)
         if (x < 0 || x >= s->w || y >= s->h)
             break;
         uint16_t v = at(s, x, y);
-        if (CELL_TYPE(v) != EMPTY && !(CELL_TYPE(v) == STONE && built(v)))
+        int open = CELL_TYPE(v) == EMPTY || own(s, i, x, y);
+        if (!open && !(CELL_TYPE(v) == STONE && built(v)))
             break;                  /* down to the ground */
         last = k;
-        if (CELL_TYPE(v) == EMPTY)
+        if (open)
             next = k;
     }
     /* Under the ledge: out past the stairs first. */
     if (left ? c->x > col : c->x + c->w - 1 < col) {
-        int x0 = c->x, y0 = c->y;
         step_side(s, i, d);
-        if (c->x == x0 && c->y == y0 && ++c->stuck >= 4 * STUCK_MOVES)
-            fail_goal(s, c);
-        return;
+        climb_progress(s, c, px, py);
+        return 0;
     }
     if (next >= 0 && !c->carry) {
         int gx, gy;
@@ -1643,22 +1660,25 @@ static void go_patch(Sim *s, int i)
             c->carry = at(s, gx, gy);
             set_cell(s, gx, gy, CELL(EMPTY, 0));
             c->work_until = s->frame + csecs(s, c, STACK_SECS);
-            return;
+            return 0;
         }
     }
-    if (c->carry && !diggable(CELL_TYPE(c->carry)) && CELL_TYPE(c->carry) != STONE) {
+    /* Something it can't build with (water, say): put it down. */
+    if (next >= 0 && c->carry && !diggable(CELL_TYPE(c->carry)) && CELL_TYPE(c->carry) != STONE) {
         drop_carry(s, c);
-        return;
+        return 0;
     }
     int bx = col + d * (next < 0 ? 0 : next), by = top + (next < 0 ? 0 : next);
-    if (next >= 0 && c->carry && in_reach(c, bx, by) && CELL_TYPE(at(s, bx, by)) == EMPTY) {
+    if (next >= 0 && c->carry && in_reach(c, bx, by) && CELL_TYPE(at(s, bx, by)) == EMPTY &&
+        (bx < c->x || bx >= c->x + c->w)) {
         /* Sand pressed into brick crumbles in time; dirt brick lasts. */
         int sand = CELL_TYPE(c->carry) == SAND;
         set_cell(s, bx, by, CELL(STONE, (CELL_COLOR(c->carry) & 0x3F) | BUILT | (sand ? SAND_BRICK : 0)));
         c->carry = 0;
         c->work_until = s->frame + csecs(s, c, STACK_SECS);
+        c->stuck = 0;
         s->stacked++;
-        return;
+        return 0;
     }
     /* Which step it's by, from the column nearest the ledge: under the
      * stairs it walks out past their foot; on them, or past their foot,
@@ -1666,16 +1686,42 @@ static void go_patch(Sim *s, int i)
     int k = ((d < 0 ? c->x + c->w - 1 : c->x) - col) * d;
     int under = k >= 0 && k <= last && c->y >= top + k;
     int way = under || (next >= 0 && !c->carry) ? d : -d;
-    int x0 = c->x, y0 = c->y;
     step_side(s, i, way);
-    if (c->x != x0 || c->y != y0)
-        c->stuck = 0;
-    else if (++c->stuck >= 4 * STUCK_MOVES)
-        fail_goal(s, c);
+    climb_progress(s, c, px, py);
+    return 0;
+}
+
+/* Back to its patch. */
+static void go_patch(Sim *s, int i)
+{
+    Critter *c = &s->crit[i];
+    if (!patch_ok(s, c)) {
+        c->has_patch = 0;
+        end_goal(s, c);
+        return;
+    }
+    if (climb_to(s, i, c->patch_x, c->patch_y))
+        end_goal(s, c);
 }
 
 /* Scoop the sand at the goal off the ledge and fling it past the nearer
  * end, where it falls. */
+/* Where a cell flung off the ledge whose top is at (x, top) lands: past
+ * its nearer end (unless that's off the screen), the first open cell up
+ * from a little above it. Returns 0 if there's none. */
+static int fling_spot(const Sim *s, int x, int top, int *fx, int *fy)
+{
+    int ly, ry, lx = ledge_end(s, x, top, -1, &ly), rx = ledge_end(s, x, top, 1, &ry);
+    int left = rx > s->w - 2 || (lx >= 1 && x - lx <= rx - x);
+    *fx = left ? lx - 1 : rx + 1;
+    *fy = (left ? ly : ry) - 2;
+    if (*fx < 0 || *fx >= s->w)
+        return 0;
+    while (*fy > 0 && CELL_TYPE(at(s, *fx, *fy)) != EMPTY)
+        (*fy)--;
+    return *fy > 0;
+}
+
 static void clear_ledge(Sim *s, int i)
 {
     Critter *c = &s->crit[i];
@@ -1686,30 +1732,22 @@ static void clear_ledge(Sim *s, int i)
     }
     if (s->frame < c->work_until)
         return;
-    int top = ledge_under(s, c->tx, c->ty), ly, ry;
+    int top = ledge_under(s, c->tx, c->ty);
     if (top < 0) {
         end_goal(s, c);
         return;
     }
-    int lx = ledge_end(s, c->tx, top, -1, &ly), rx = ledge_end(s, c->tx, top, 1, &ry);
-    /* The nearer end, unless that's off the screen. */
-    int left = rx > s->w - 2 || (lx >= 1 && c->tx - lx <= rx - c->tx);
-    int fx = left ? lx - 1 : rx + 1, fy = (left ? ly : ry) - 2;
-    int want = c->kind == CR_LARGE ? TOSS_SCOOP : 1, n = 0;
+    int want = c->kind == CR_LARGE ? TOSS_SCOOP : 1, n = 0, fx, fy;
     for (int dy = 0; dy <= 1 && n < want; dy++)
         for (int dx = -1; dx <= 1 && n < want; dx++) {
             int x = c->tx + dx, y = c->ty + dy;
             if (x < 0 || x >= s->w || y >= s->h || rank_ledge(s, x, y) < 0)
                 continue;
-            /* Where it lands: the first open cell up from past the end. */
-            int ty = fy;
-            while (ty > 0 && (fx < 0 || fx >= s->w || CELL_TYPE(at(s, fx, ty)) != EMPTY))
-                ty--;
-            if (ty <= 0 || fx < 0 || fx >= s->w)
+            if (!fling_spot(s, c->tx, top, &fx, &fy))
                 break;
             uint16_t v = at(s, x, y);
             set_cell(s, x, y, CELL(EMPTY, 0));
-            set_cell(s, fx, ty, v);
+            set_cell(s, fx, fy, v);
             s->flung++;
             n++;
         }
@@ -1734,7 +1772,7 @@ static void plant_seed(Sim *s, int i)
     Critter *c = &s->crit[i];
     uint16_t v = at(s, c->tx, c->ty);
     int top = CELL_TYPE(v) == STONE && !built(v) ? c->ty : ledge_under(s, c->tx, c->ty);
-    if (top < 0 || CELL_TYPE(c->carry) != SEED) {
+    if (top < 0 || !c->seed) {
         end_goal(s, c);
         return;
     }
@@ -1771,7 +1809,7 @@ static void plant_seed(Sim *s, int i)
         for (; yy >= 0 && y - yy <= LEDGE_PILE && CELL_TYPE(at(s, x, yy)) == SAND; yy--)
             set_cell(s, x, yy, CELL(DIRT, rnd(s) & 0xFF));
     }
-    c->carry = 0;
+    c->seed = 0;
     c->fails = 0;
     s->seeded++;
     s->shower_until[i] = s->frame + (uint32_t)secs(s, SHOWER_SECS);
@@ -1984,7 +2022,7 @@ static int use_carry(Sim *s, int i)
     int x, y, room;
     int t = CELL_TYPE(c->carry);
     if (t == WATER) {
-        if (find_best(s, i, rank_pour, &x, &y) && (field_short(s, c) || !h)) {
+        if (find_pour(s, i, &x, &y) && (field_short(s, c) || !h)) {
             set_goal(s, c, G_FARM, x, y);
             c->state = CR_CARRY;
             return 1;
@@ -1995,7 +2033,7 @@ static int use_carry(Sim *s, int i)
             c->state = CR_CARRY;
             return 1;
         }
-        if (find_best(s, i, rank_pour, &x, &y)) {
+        if (find_pour(s, i, &x, &y)) {
             set_goal(s, c, G_FARM, x, y);
             c->state = CR_CARRY;
             return 1;
@@ -2007,13 +2045,6 @@ static int use_carry(Sim *s, int i)
             c->state = CR_CARRY;
             return 1;
         }
-    } else if (t == SEED) {
-        if (find_best(s, i, rank_seed_spot, &x, &y) || find_far(s, i, rank_seed_spot, &x, &y)) {
-            set_goal(s, c, G_PLANT, x, y);
-            c->state = CR_CARRY;
-            return 1;
-        }
-        /* No ledge anywhere: let it fall and sprout where it lands. */
     } else if (t == STONE || t == IRON) {
         if (h && next_build(s, h, &x, &y) && !avoided(s, c, x, y)) {
             set_goal(s, c, G_BUILD, x, y);
@@ -2031,6 +2062,15 @@ static int use_carry(Sim *s, int i)
         if (h && (t == IRON || !(part_done(s, h, 1) && part_done(s, h, 0))))
             return 0;
     } else {
+        /* On its patch, junk goes over the end of the ledge. */
+        int fx, fy;
+        if (patch_ok(s, c) && abs(c->x - c->patch_x) <= PATCH_RANGE && c->y < c->patch_y &&
+            fling_spot(s, c->patch_x, c->patch_y, &fx, &fy)) {
+            set_cell(s, fx, fy, c->carry);
+            c->carry = 0;
+            s->flung++;
+            return 0;
+        }
         set_goal(s, c, G_DUMP, dump_x(s, c), c->y);
         c->state = CR_CARRY;
         return 1;
@@ -2074,10 +2114,13 @@ static void think(Sim *s, int i)
         set_goal(s, c, G_EAT, fx, fy);
         return;
     }
-    if (c->carry && use_carry(s, i))
+    /* A seed to plant: on the nearest ledge. Without one in sight or
+     * anywhere on the screen, it keeps the seed for later. */
+    if (c->seed && (find_best(s, i, rank_seed_spot, &fx, &fy) ||
+                    find_far(s, i, rank_seed_spot, &fx, &fy))) {
+        set_goal(s, c, G_PLANT, fx, fy);
         return;
-    if (c->carry)
-        goto stroll;                /* hands full: nothing else for now */
+    }
 
     if (c->home < 0 || !s->home[c->home].used)
         c->home = -1;
@@ -2085,7 +2128,8 @@ static void think(Sim *s, int i)
         settle(s, i);
     Home *h = c->home >= 0 ? &s->home[c->home] : NULL;
 
-    /* Stay near its patch (or its home), and not below the patch. */
+    /* Stay near its patch (or its home), and not below the patch: back
+     * there first, whatever it's carrying. */
     if (patch_ok(s, c)) {
         int far = abs(c->x - c->patch_x) > PATCH_RANGE &&
                   (!h || c->x < h->x - PATCH_RANGE || c->x > h->x + home_w(h) + PATCH_RANGE);
@@ -2093,6 +2137,12 @@ static void think(Sim *s, int i)
             set_goal(s, c, G_PATCH, c->patch_x, c->patch_y);
             return;
         }
+    }
+    if (c->carry && use_carry(s, i))
+        return;
+    if (c->carry)
+        goto stroll;                /* hands full: nothing else for now */
+    if (patch_ok(s, c)) {
         /* There: sand piled on it goes over the edge. */
         if (abs(c->x - c->patch_x) <= PATCH_RANGE && find_best(s, i, rank_ledge, &fx, &fy) &&
             abs(fx - c->patch_x) <= SEED_IRON) {
@@ -2119,11 +2169,9 @@ static void think(Sim *s, int i)
     /* Keep the field stocked: puddles first, then the well. */
     int px, py, puddle = find_best(s, i, rank_water, &fx, &fy);
     int well_done = h && part_done(s, h, 1);
-    if (well_done)
-        h->hut = 1;                 /* the well first, then the hut */
-    c->thirsty = (uint8_t)((field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) ||
+    c->thirsty = (uint8_t)((field_short(s, c) && find_pour(s, i, &px, &py)) ||
                            (well_done && (well_water(s, h, &room), room > 0)));
-    if (field_short(s, c) && find_best(s, i, rank_pour, &px, &py)) {
+    if (field_short(s, c) && find_pour(s, i, &px, &py)) {
         if (!puddle && well_done && well_water(s, h, &room) > 0) {
             mouth(h, &fx, &fy);
             puddle = 1;
@@ -2287,7 +2335,7 @@ static void catch_seed(Sim *s, int i)
         for (int x = c->x - 1; x <= c->x + c->w; x++) {
             if (x < 0 || x >= s->w || y < 0 || y >= s->h || CELL_TYPE(at(s, x, y)) != SEED)
                 continue;
-            c->carry = at(s, x, y);
+            c->seed = 1;
             set_cell(s, x, y, CELL(EMPTY, 0));
             s->seeds_caught++;
             if (c->goal == G_SEED || c->goal == G_CATCH || c->goal == G_WANDER)
@@ -2342,7 +2390,7 @@ static void critter_tick(Sim *s, int i)
             start_dying(s, c);
         }
     }
-    if (!c->carry && c->goal != G_DIE)
+    if (!c->seed && c->goal != G_DIE)
         catch_seed(s, i);
     if (c->thirsty && !c->carry && c->goal != G_DIE)
         catch_drop(s, i);
@@ -2400,7 +2448,7 @@ static void critter_tick(Sim *s, int i)
     /* Rain or a seed coming down: it looks every move. A seed comes
      * before anything but eating. */
     int dx;
-    if (!c->carry && c->goal != G_DIE && c->goal != G_LEAVE && c->goal != G_SHELTER &&
+    if (!c->seed && c->goal != G_DIE && c->goal != G_LEAVE && c->goal != G_SHELTER &&
         c->goal != G_EAT && falling(s, c, 1, &dx)) {
         if (c->goal != G_SEED)
             set_goal(s, c, G_SEED, dx, c->y);
@@ -2468,10 +2516,15 @@ static void critter_tick(Sim *s, int i)
         if (approach(s, i))
             clear_ledge(s, i);
         break;
-    case G_PLANT:
-        if (approach(s, i))
+    case G_PLANT: {
+        /* Below the ledge it's for: up there first. */
+        int top = ledge_under(s, c->tx, c->ty);
+        if (top >= 0 && c->y >= top)
+            climb_to(s, i, c->tx, top);
+        else if (approach(s, i))
             plant_seed(s, i);
         break;
+    }
     case G_PATCH:
         go_patch(s, i);
         break;
@@ -2549,6 +2602,8 @@ void charge_critters(Sim *s)
 /* Every cell of the hut, roof and floor, is iron: it'll come through. */
 static int hut_iron(const Sim *s, const Home *h)
 {
+    if (!h->hut)
+        return 0;
     int hx = hut_x(h);
     for (int x = hx; x < hx + HUT_W; x++)
         if (CELL_TYPE(at(s, x, h->y)) != IRON || CELL_TYPE(at(s, x, h->y - 4)) != IRON)
@@ -2611,9 +2666,11 @@ void critters_refill(Sim *s)
         if (c->state != CR_FREE && c->state != CR_AWAY && c->goal == G_LEAVE)
             leave(s, i);
     }
+    /* Homes that fell, or that nobody lives in any more, are forgotten. */
     for (int k = 0; k < MAX_HOMES; k++) {
         Home *h = &s->home[k];
-        if (!h->used || home_stands(s, h))
+        float eat;
+        if (!h->used || (home_stands(s, h) && residents(s, k, &eat)))
             continue;
         memset(h, 0, sizeof *h);
         for (int i = 0; i < MAX_CRITTERS; i++)
@@ -2729,7 +2786,7 @@ int sim_add_critter(Sim *s, int kind)
     c->state = CR_FALLING;
     c->face = (rnd(s) & 1) ? 1 : -1;
     c->food = 1.0f;
-    c->carry = CELL(SEED, 0);
+    c->seed = 1;
     c->home = -1;
     c->next_think = s->frame + (uint32_t)slot;
     s->critters++;

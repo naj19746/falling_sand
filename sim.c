@@ -101,7 +101,8 @@ static inline int drain_immune(const Sim *s, int x, int y)
     return s->keep ? s->keep[y * s->w + x] : 0;
 }
 
-/* Mark iron and every earth or tree cell connected to it. Runs once per drain. */
+/* Mark iron and every earth or tree cell, or stone critters built, connected
+ * to it. Runs once per drain. */
 static void mark_kept(Sim *s)
 {
     int n = 0, w = s->w;
@@ -118,7 +119,11 @@ static void mark_kept(Sim *s)
                       y > 0 ? i - w : -1, y < s->h - 1 ? i + w : -1 };
         for (int k = 0; k < 4; k++) {
             int j = nb[k];
-            if (j < 0 || s->keep[j] || !HELD_BY_IRON(CELL_TYPE(s->cells[j])))
+            /* Earth and trees joined to iron, and anything critters built
+             * on it. */
+            if (j < 0 || s->keep[j] ||
+                !(HELD_BY_IRON(CELL_TYPE(s->cells[j])) ||
+                  (CELL_TYPE(s->cells[j]) == STONE && (CELL_COLOR(s->cells[j]) & BUILT))))
                 continue;
             s->keep[j] = 1;
             s->stack[n++] = j;

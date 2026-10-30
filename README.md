@@ -142,9 +142,9 @@ more sand. They live off the land:
   runs down a gutter into the well, so wells are built as wide as the
   ground allows.
 - **Building:** they mine stone and iron, or press bare dirt into brick,
-  and build a well on level ground, near food if they can, then a hut (a
-  roof over a floor) beside it. New critters drop in over stone or iron
-  when there is some. Each critter arrives with a seed, and sprints to
+  and build a small well on their patch's iron. Built on iron, it comes
+  through the drain with its water. New critters drop in over stone or
+  iron when there is some. Each critter arrives with a seed, and sprints to
   catch any that falls near it. It plants a seed on a stone ledge,
   turning a short stretch of it to iron that never rusts, with dirt on
   top, and a short shower falls there to grow moss on it. Critters stay

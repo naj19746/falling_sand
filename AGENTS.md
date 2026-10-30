@@ -82,7 +82,8 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
   plan too. Steps pressed from sand also carry `SAND_BRICK` and turn back
   into sand `SAND_BRICK_SECS` (sim time) after they're laid; `set_cell()`
   keeps the `bricks` total that wakes `age_damp()` for them. Everything
-  else built lasts until the drain. Iron outside a seed's patch never has
+  else built lasts until the drain, unless it's joined to iron: built
+  stone joined to iron is kept like earth (`mark_kept()`). Iron outside a seed's patch never has
   the `SEEDED` bit, and stone laid in a home never has `SAND_BRICK`.
 - Every critter timing goes through `csecs()` (supercharge) except
   falling.

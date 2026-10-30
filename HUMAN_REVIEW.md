@@ -475,6 +475,73 @@ The matrix is about the same as before (8 seeds x 3 days): typical 3/8
 runs alive at the end, mean life 1.6 h; showers 0/8, 1.7 h; nocommit
 2/8, 2.3 h; starve240 8/8, 7.8 h.
 
+### Follow-up: homes on the patch
+
+Asked for: build homes on the patch, small.
+
+**What a home is now:** a well 3 cells wide (walls included) standing on
+the patch's iron, which is its floor. That's 6 cells to build: two walls
+two high, and a 2-cell roof with the mouth between. It goes toward one
+end of the patch, leaving the middle for the field.
+- No hut. A critter standing on its patch already stays through the
+  drain, so a hut added nothing.
+- The old site search is gone (level ground, food, iron and edge
+  bonuses, wide wells). The hut code is still there, because the older
+  tests build huts by hand; it could be deleted.
+- A critter with a patch joins a home on it or plans one there. A
+  critter without one joins the nearest home. Homes nobody lives in are
+  forgotten at the next drain.
+- `mark_kept()` keeps built stone joined to iron through the drain, so
+  the walls last and well water on the iron floor is kept.
+
+**Fixes the test turned up:**
+- A carried seed has its own slot. Building stairs needs the critter's
+  hands, and it had been dropping the seed, or laying it as a brick.
+- Stairs work for planting too: a critter can climb to a floating ledge
+  to plant its first seed, not just to return to a patch.
+- With a patch, junk cleared off the home is flung over the end of the
+  ledge, instead of carried to a dump spot past the edge, which walked
+  critters off their ledge.
+- With a patch, critters only pour on their own patch. They had walked
+  off to water wheat that grew below, from dirt they'd thrown off.
+- They don't mine stone within 2 cells of seeded iron (the ledge holding
+  up their patch).
+- "Go back to the patch" comes before using what they carry. Holding
+  stone, a critter used to skip it and stroll on the ground forever.
+- The stair scan treats the critter's own body as open, and it never
+  lays a step in a column it stands in. It had laid one over its own
+  head.
+- Stair progress means getting nearer the target or laying a step, with
+  about a minute's patience. Shuffling sideways used to count.
+- A critter standing on the next cell to build steps aside first.
+
+t19: a newcomer lands on the ground, climbs stairs to a floating ledge,
+plants its seed and plans a well there. In 90 minutes it builds 6 of the
+9 plan cells (the floor counts), then keeps falling into its own
+half-built well on the way to stone on the far side. **It still fails.**
+The well, its water and the critter all come through a drain.
+
+**Realistic matrix (8 seeds x 3 days):** about the same as before.
+
+| Scenario | Runs alive at end | Mean life (avg) | Fill held over 3 days | Home cells laid per run |
+|---|---|---|---|---|
+| typical | 3/8 | 1.4-3.1 h (2.0) | 0-7.3 h | 0-7 |
+| nocommit | 2/8 | 1.4-1.8 h (1.6) | 0-3.4 h | 0-7 |
+| starve240 | 8/8 | 4.0-9.3 h (6.6) | 3.7-14.5 h | 4-15 |
+
+No well held water in any run, and nothing was guttered. Traced over 3
+realistic days, critters with a home spend:
+- 26-46% of their time getting back to their patch (they fall off while
+  fetching things)
+- 35-46% of the time with no stone, debris or bare dirt in sight: the
+  ledge around the patch is off-limits and the rest is buried
+- under 1% building
+
+**Next step (your call):** let home walls be built from the sand
+critters already clear off their patch, pressed into lasting brick.
+Material would then always be at hand, and fewer trips would take them
+off their ledge.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

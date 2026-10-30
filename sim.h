@@ -162,6 +162,7 @@ typedef struct {
     uint32_t avoid_until;   /* left alone until then */
     uint8_t eating;         /* keeps eating until full */
     uint8_t dug;            /* digs in place while walking */
+    uint8_t seed;           /* carries a seed, apart from what's in its hands */
     uint8_t has_patch;      /* planted a seed: patch_x, patch_y is on it */
     int patch_x, patch_y;   /* top of the middle of its patch's iron */
     uint8_t climbing;       /* clinging to the wall it faces */
