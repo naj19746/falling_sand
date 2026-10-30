@@ -173,6 +173,16 @@ typedef struct {
     int tree_minutes;       /* time to grow fully */
     int tree_thirst_minutes;/* time without water before it starts dying */
     float drain_overfill;
+
+    /* Steps per second of display time (fps * steps_per_frame), so
+     * timings measured in sim time can be written in seconds. */
+    int steps_per_sec;
+
+    /* Critters (critter.c). */
+    int critters_on;        /* update and spawn them at all */
+    int critter_max;        /* most alive at once, up to MAX_CRITTERS */
+    int starve_minutes;     /* sim minutes from full to starving */
+    int wheat_per_pour;     /* stock levels one pour adds */
 } Sim;
 
 int  sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters);
@@ -186,6 +196,13 @@ void sim_drop_seed(Sim *s);     /* from a random spot along the top */
 /* Lightning from the blaster to something nearby. Returns 0 if it struck,
  * -1 if there was nothing in reach (the strike is used up either way). */
 int  sim_strike(Sim *s);
+
+/* Critter kinds for sim_add_critter: CR_ANY picks one at random. */
+enum { CR_ANY = -1, CR_SMALL, CR_LARGE };
+
+/* Drop a new critter from the top of the screen. Returns its slot, or -1
+ * if there's no room for it. */
+int  sim_add_critter(Sim *s, int kind);
 
 /* Chunks currently being simulated, for --profile. */
 int  sim_awake_chunks(const Sim *s);

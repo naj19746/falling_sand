@@ -349,6 +349,7 @@ int main(int argc, char **argv)
     sim.tree_minutes = cfg.tree_minutes;
     sim.tree_thirst_minutes = cfg.tree_thirst_minutes;
     sim.drain_overfill = cfg.drain_overfill;
+    sim.steps_per_sec = cfg.fps * cfg.steps_per_frame;
 
     if (cfg.audio) {
         if (audio_start(cfg.audio_sink) == 0)

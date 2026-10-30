@@ -8,9 +8,9 @@ DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 PREFIX ?= $(HOME)/.local
 
-SRCS = main.c sim.c render.c x11.c audio.c config.c weather.c spotify.c keyboard.c
+SRCS = main.c sim.c critter.c render.c x11.c audio.c config.c weather.c spotify.c keyboard.c
 OBJS = $(SRCS:.c=.o)
-HDRS = sim.h render.h x11.h audio.h config.h weather.h spotify.h keyboard.h
+HDRS = sim.h sim_internal.h render.h x11.h audio.h config.h weather.h spotify.h keyboard.h
 
 sandbg: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(SDL_LIBS) -lX11 -lXext -lpulse $(DBUS_LIBS) -lm
