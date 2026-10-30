@@ -195,7 +195,7 @@ int config_load(Config *c, const char *path)
     if (!f)
         return 1;
 
-    char line[512];
+    char line[1280];
     int lineno = 0;
     while (fgets(line, sizeof line, f)) {
         lineno++;

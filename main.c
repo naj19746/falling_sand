@@ -254,7 +254,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         const char *next = i + 1 < argc ? argv[i + 1] : NULL;
-        char kv[128];
+        char kv[1280];  /* room for a long path */
         int r = 0;
 
         if (strcmp(arg, "--config") == 0 && next) {

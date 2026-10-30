@@ -17,6 +17,8 @@
 #include "sim.h"
 
 #define PXO_POLL_MS     5000    /* stat() Pixelorama's config this often */
+#define KANA_POLL_MS    30000   /* ask the kana database this often */
+#define KANA_MAX_BYTES  (8 << 20)   /* a state document is ~15 KB */
 #define MAX_PENDING     100     /* critters waiting; more are dropped */
 #define PATH_LEN        1024
 
@@ -30,6 +32,7 @@ static int npending;
 static int dirty;
 
 /* The rest belongs to the thread once it's started. */
+static char kana_base[256];
 static char pxo_path[PATH_LEN];
 static char state_path[PATH_LEN];
 
@@ -39,6 +42,22 @@ static int pxo_known;
 static struct timespec pxo_mtime;
 static char **seen;
 static int nseen, cap_seen;
+
+/* Kana: per practice database, the last sessionsCompleted handled and the
+ * lastSession.endedAt that went with it ("" if it had none), as the raw
+ * JSON token, so a number or a string both work. */
+#define ENDED_LEN 64
+typedef struct {
+    const char *name;
+    int known;
+    long count;
+    char ended[ENDED_LEN];
+} KanaDb;
+static KanaDb kana[] = { { "hiragana-practice", 0, 0, "" },
+                         { "katakana-practice", 0, 0, "" } };
+#define NKANA ((int)(sizeof kana / sizeof kana[0]))
+
+static uint32_t rng_state;
 
 static int poll_ms(int normal)
 {
@@ -155,13 +174,22 @@ static int load_state(const char *path)
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\n")] = '\0';
         long long sec;
-        long nsec;
+        long nsec, count;
+        char name[64], ended[ENDED_LEN];
         if (!strncmp(line, "seen ", 5)) {
             add_seen(line + 5);
         } else if (sscanf(line, "pixelorama_mtime %lld.%ld", &sec, &nsec) == 2) {
             pxo_known = 1;
             pxo_mtime.tv_sec = (time_t)sec;
             pxo_mtime.tv_nsec = nsec;
+        } else if (sscanf(line, "kana %63s %ld %63s", name, &count, ended) == 3) {
+            for (int i = 0; i < NKANA; i++)
+                if (!strcmp(kana[i].name, name)) {
+                    kana[i].known = 1;
+                    kana[i].count = count;
+                    /* "-" stands for no lastSession. */
+                    snprintf(kana[i].ended, ENDED_LEN, "%s", strcmp(ended, "-") ? ended : "");
+                }
         } else if (!strncmp(line, "pending", 7)) {
             /* One letter per critter: a(ny), s(mall), l(arge). */
             for (const char *p = line + 7; *p && npending < MAX_PENDING; p++)
@@ -193,6 +221,10 @@ static void save_state(void)
         return;
     }
     fprintf(f, "# sandbg: rewards already counted and critters waiting to drop in\n");
+    for (int i = 0; i < NKANA; i++)
+        if (kana[i].known)
+            fprintf(f, "kana %s %ld %s\n", kana[i].name, kana[i].count,
+                    kana[i].ended[0] ? kana[i].ended : "-");
     if (pxo_known)
         fprintf(f, "pixelorama_mtime %lld.%09ld\n",
                 (long long)pxo_mtime.tv_sec, (long)pxo_mtime.tv_nsec);
@@ -366,15 +398,266 @@ static int poll_pixelorama(void)
     return 1;
 }
 
+/* ---- JSON, just enough of it ---- */
+
+static const char *skip_ws(const char *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+        p++;
+    return p;
+}
+
+/* Past the JSON value starting at p (strings, objects and arrays nest);
+ * NULL if it's cut short. */
+static const char *json_skip(const char *p)
+{
+    p = skip_ws(p);
+    if (*p == '"') {
+        for (p++; *p && *p != '"'; p++)
+            if (*p == '\\' && p[1])
+                p++;
+        return *p ? p + 1 : NULL;
+    }
+    if (*p == '{' || *p == '[') {
+        int depth = 0;
+        for (; *p; p++) {
+            if (*p == '"') {
+                p = json_skip(p);
+                if (!p)
+                    return NULL;
+                p--;
+            } else if (*p == '{' || *p == '[') {
+                depth++;
+            } else if ((*p == '}' || *p == ']') && --depth == 0) {
+                return p + 1;
+            }
+        }
+        return NULL;
+    }
+    while (*p && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n')
+        p++;
+    return p;
+}
+
+/* The value of key among obj's own members (not nested ones), or NULL. */
+static const char *json_get(const char *obj, const char *key)
+{
+    if (!obj)
+        return NULL;
+    const char *p = skip_ws(obj);
+    if (*p != '{')
+        return NULL;
+    size_t klen = strlen(key);
+    for (p = skip_ws(p + 1); *p == '"'; ) {
+        const char *k = p + 1;
+        const char *end = json_skip(p);
+        if (!end)
+            return NULL;
+        p = skip_ws(end);
+        if (*p != ':')
+            return NULL;
+        p = skip_ws(p + 1);
+        if ((size_t)(end - 1 - k) == klen && !strncmp(k, key, klen))
+            return p;
+        p = json_skip(p);
+        if (!p)
+            return NULL;
+        p = skip_ws(p);
+        if (*p != ',')
+            return NULL;
+        p = skip_ws(p + 1);
+    }
+    return NULL;
+}
+
+/* A number member of obj; -1 if it's missing or not a number. */
+static int json_num(const char *obj, const char *key, double *out)
+{
+    const char *v = json_get(obj, key);
+    if (!v)
+        return -1;
+    char *end;
+    *out = strtod(v, &end);
+    return end == v ? -1 : 0;
+}
+
+/* A string member of obj, unescaped only for \" and \\; -1 if missing. */
+static int json_str(const char *obj, const char *key, char *out, size_t size)
+{
+    const char *v = json_get(obj, key);
+    return v && read_quoted(v, out, size) ? 0 : -1;
+}
+
+/* A member as its raw token: a string's contents or a number's digits.
+ * Spaces become '_' so it fits on one state file line. */
+static int json_token(const char *obj, const char *key, char *out, size_t size)
+{
+    const char *v = json_get(obj, key);
+    if (!v)
+        return -1;
+    if (*v == '"') {
+        if (!read_quoted(v, out, size))
+            return -1;
+    } else {
+        const char *end = json_skip(v);
+        size_t n = end ? (size_t)(end - v) : 0;
+        if (n == 0 || n >= size || *v == '{' || *v == '[')
+            return -1;
+        memcpy(out, v, n);
+        out[n] = '\0';
+    }
+    for (char *c = out; *c; c++)
+        if (*c == ' ' || *c == '\t' || *c == '\n')
+            *c = '_';
+    return out[0] && strcmp(out, "null") ? 0 : -1;
+}
+
+/* ---- kana practice ---- */
+
+/* What one GET /api/db/<name> says. The service answers
+ * {"state": <AppState or null>, "rev": n}. */
+typedef struct {
+    long count;             /* state.sessionsCompleted */
+    int setting_minutes;    /* state.settings.sessionMinutes, 0 if missing */
+    int has_last;           /* state.lastSession is there */
+    char ended[ENDED_LEN];  /* lastSession.endedAt */
+    int minutes;            /* lastSession.minutes */
+    char reason[32];        /* lastSession.endReason */
+} KanaSeen;
+
+/* Fetch one database with curl. 0 on success. */
+static int kana_fetch(const char *base, const char *name, KanaSeen *k)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof cmd, "curl -s --fail -m 5 '%s/api/db/%s' 2>/dev/null", base, name);
+    FILE *p = popen(cmd, "r");
+    if (!p)
+        return -1;
+    size_t cap = 64 << 10, n = 0;
+    char *buf = malloc(cap);
+    while (buf) {
+        if (n + 1 == cap) {
+            char *b = cap < KANA_MAX_BYTES ? realloc(buf, cap * 2) : NULL;
+            if (!b) {
+                free(buf);
+                buf = NULL;
+                break;
+            }
+            buf = b;
+            cap *= 2;
+        }
+        size_t got = fread(buf + n, 1, cap - 1 - n, p);
+        if (got == 0)
+            break;
+        n += got;
+    }
+    int failed = pclose(p) != 0 || !buf;
+    if (failed) {
+        free(buf);
+        return -1;
+    }
+    buf[n] = '\0';
+
+    memset(k, 0, sizeof *k);
+    const char *state = json_get(buf, "state");
+    double v;
+    int ok = state != NULL;
+    if (ok && !strncmp(state, "null", 4)) {
+        /* Never practised: nothing saved yet. */
+    } else if (ok && json_num(state, "sessionsCompleted", &v) == 0) {
+        k->count = (long)v;
+        if (json_num(json_get(state, "settings"), "sessionMinutes", &v) == 0)
+            k->setting_minutes = (int)v;
+        const char *last = json_get(state, "lastSession");
+        if (last && *last == '{' && json_token(last, "endedAt", k->ended, sizeof k->ended) == 0) {
+            k->has_last = 1;
+            if (json_num(last, "minutes", &v) == 0)
+                k->minutes = (int)v;
+            json_str(last, "endReason", k->reason, sizeof k->reason);
+        }
+    } else {
+        ok = 0;
+    }
+    free(buf);
+    return ok ? 0 : -1;
+}
+
+static uint32_t rng(void)
+{
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
+
+/* The pay for one finished set of this many minutes. */
+static void pay_set(const char *name, int minutes)
+{
+    int n = 0;
+    if (minutes >= 15) {
+        /* Two critters, one of each kind: a colony needs both. */
+        earn(CR_SMALL);
+        earn(CR_LARGE);
+        n = 2;
+    } else if (minutes >= 10 || (minutes >= 5 && (rng() & 1))) {
+        earn(CR_ANY);
+        n = 1;
+    }
+    fprintf(stderr, "progress: %s: a %d-minute set, %d critter%s\n",
+            name, minutes, n, n == 1 ? "" : "s");
+}
+
+/* Returns 1 if anything changed that should be saved. */
+static int poll_kana(KanaDb *db)
+{
+    KanaSeen k;
+    /* Down or unreachable: change nothing, and catch up when it's back. */
+    if (kana_fetch(kana_base, db->name, &k) != 0)
+        return 0;
+    const char *ended = k.has_last ? k.ended : "";
+    int new_last = k.has_last && strcmp(ended, db->ended) != 0;
+
+    if (db->known && k.count > db->count) {
+        long sets = k.count - db->count;
+        if (new_last) {
+            /* The latest set says how it ended. Sets missed while the
+             * service was down count at its length, since theirs isn't
+             * known. Quitting early or running out of kana pays nothing. */
+            if (!strcmp(k.reason, "time") || !strcmp(k.reason, "cards"))
+                pay_set(db->name, k.minutes);
+            for (long i = 1; i < sets; i++)
+                pay_set(db->name, k.minutes);
+        } else {
+            /* An app without lastSession: every set counts, at the length
+             * chosen in its settings. */
+            for (long i = 0; i < sets; i++)
+                pay_set(db->name, k.setting_minutes);
+        }
+    }
+    /* The first look, or a reset or import that lowered the count, only
+     * sets where counting starts from. */
+    if (db->known && db->count == k.count && !new_last)
+        return 0;
+    db->known = 1;
+    db->count = k.count;
+    snprintf(db->ended, ENDED_LEN, "%s", ended);
+    return 1;
+}
+
 /* ---- the thread ---- */
 
 static int progress_thread(void *unused)
 {
     (void)unused;
-    Uint64 next_pxo = 0;
+    Uint64 next_pxo = 0, next_kana = 0;
     for (;;) {
         Uint64 now = SDL_GetTicks64();
         int changed = 0;
+        if (kana_base[0] && now >= next_kana) {
+            for (int i = 0; i < NKANA; i++)
+                changed |= poll_kana(&kana[i]);
+            next_kana = SDL_GetTicks64() + (Uint64)poll_ms(KANA_POLL_MS);
+        }
         if (pxo_path[0] && now >= next_pxo) {
             changed |= poll_pixelorama();
             next_pxo = now + (Uint64)poll_ms(PXO_POLL_MS);
@@ -387,7 +670,8 @@ static int progress_thread(void *unused)
             save_state();
 
         /* Sleep until the next poll, or until a critter drops in. */
-        Uint64 wake_at = next_pxo;
+        Uint64 wake_at = !pxo_path[0] ? next_kana :
+                         !kana_base[0] || next_pxo < next_kana ? next_pxo : next_kana;
         now = SDL_GetTicks64();
         SDL_LockMutex(lock);
         if (!dirty && wake_at > now)
@@ -411,10 +695,17 @@ static int take_lock(void)
 
 int progress_start(const char *kana_url, const char *pxo_config)
 {
-    (void)kana_url;
-    if (!*pxo_config)
+    if (!*kana_url && !*pxo_config)
         return -1;
+    snprintf(kana_base, sizeof kana_base, "%s", kana_url);
+    /* So "http://host:8080/" works too. */
+    size_t n = strlen(kana_base);
+    while (n > 0 && kana_base[n - 1] == '/')
+        kana_base[--n] = '\0';
     snprintf(pxo_path, sizeof pxo_path, "%s", pxo_config);
+    rng_state = (uint32_t)time(NULL) ^ (uint32_t)SDL_GetPerformanceCounter() ^ 0x9e3779b9u;
+    if (!rng_state)
+        rng_state = 1;
     state_file_path(state_path, sizeof state_path);
     make_parent_dirs(state_path);
     if (take_lock() != 0) {
@@ -456,12 +747,39 @@ static void print_pixelorama(const char *path)
         printf("  no drawing saved yet\n");
 }
 
+static void print_kana(const char *base, const KanaDb *db)
+{
+    KanaSeen k;
+    if (kana_fetch(base, db->name, &k) != 0) {
+        printf("%s: can't reach %s/api/db/%s\n", db->name, base, db->name);
+        return;
+    }
+    printf("%s: %ld sets done (%d minutes chosen)", db->name, k.count, k.setting_minutes);
+    if (db->known)
+        printf(", %ld already counted", db->count);
+    printf("\n");
+    if (k.has_last)
+        printf("  last set: %d minutes, ended by %s, at %s%s\n", k.minutes,
+               k.reason[0] ? k.reason : "?", k.ended,
+               !strcmp(k.ended, db->ended) ? " (already counted)" : "");
+    else
+        printf("  no lastSession: every set counts at the chosen length\n");
+}
+
 int progress_print(const char *kana_url, const char *pxo_config)
 {
-    (void)kana_url;
     state_file_path(state_path, sizeof state_path);
     int none = load_state(state_path);
 
+    char base[256];
+    snprintf(base, sizeof base, "%s", kana_url);
+    size_t n = strlen(base);
+    while (n > 0 && base[n - 1] == '/')
+        base[--n] = '\0';
+    if (!*base)
+        printf("kana: off\n");
+    for (int i = 0; *base && i < NKANA; i++)
+        print_kana(base, &kana[i]);
     print_pixelorama(pxo_config);
 
     printf("state: %s%s\n", state_path, none ? " (not written yet)" : "");

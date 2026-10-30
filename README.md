@@ -20,6 +20,11 @@ over. A few things outside the sandbox feed into it:
   drain: it and the dirt, moss or trees touching it stay, while the rest
   of the pile sifts through. Now and then some or all of it rusts back to
   stone.
+- **Practice and drawing:** finishing a kana practice set on the kana
+  platform (5 minutes: one critter half the time, 10: one, 15: two) or
+  saving a new [Pixelorama](https://pixelorama.org/) drawing drops a
+  critter into the sandbox. Quitting a set early, re-saving and exporting
+  don't count.
 - **Keyboard:** on a Keychron Q4 running the sandbg keymap, the per-key
   LEDs mirror the sandbox: piles glow amber and brighten as they grow,
   drizzle flashes single keys while steady rain glows across the board,
@@ -110,7 +115,7 @@ sandbg --meter           # live audio level, as the blaster sees it
 sandbg --spotify         # what Spotify is playing, and each finished song
 sandbg --strike          # fire one lightning strike at the running copy
 sandbg --critter         # drop a critter into the running copy
-sandbg --progress        # what earns critters: drawings, and critters waiting
+sandbg --progress        # what earns critters: kana sets, drawings, critters waiting
 sandbg --keyboard        # show the Keychron LED interface and keymap status
 sandbg --keyboard-preview  # run with the LED colors drawn in the terminal
 sandbg --profile         # print frame timings every 5 seconds
@@ -162,8 +167,9 @@ other models would need their LED layout added to `keyboard.c`.
 
 Your configured location is sent to Open-Meteo every 10 minutes. Nothing
 else leaves the machine: audio levels are read from PulseAudio and Spotify
-is read over D-Bus, and Pixelorama's config.ini is read for newly saved
-drawings, all locally. What's been counted is kept in
+is read over D-Bus, the kana platform's database is read over HTTP at
+`kana_url` (localhost by default), and Pixelorama's config.ini is read for
+newly saved drawings, all locally. What's been counted is kept in
 `~/.local/state/sandbg/progress`.
 
 ## Limitations
