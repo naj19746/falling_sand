@@ -20,6 +20,11 @@ over. A few things outside the sandbox feed into it:
   drain: it and the dirt, moss or trees touching it stay, while the rest
   of the pile sifts through. Now and then some or all of it rusts back to
   stone.
+- **Practice and drawing:** finishing a kana practice set on the kana
+  platform (5 minutes: one critter half the time, 10: one, 15: two) or
+  saving a new [Pixelorama](https://pixelorama.org/) drawing drops a
+  critter into the sandbox. Quitting a set early, re-saving and exporting
+  don't count.
 - **Keyboard:** on a Keychron Q4 running the sandbg keymap, the per-key
   LEDs mirror the sandbox: piles glow amber and brighten as they grow,
   drizzle flashes single keys while steady rain glows across the board,
@@ -87,6 +92,10 @@ Edit `~/.config/sandbg/config.ini`, then restart with
 | `fill_reset` | 0.6 | Drain when this fraction of the screen is sand |
 | `keyboard` | auto | Keychron LEDs: `auto`, `off` or `preview` |
 | `keyboard_brightness` | 1.0 | Overall LED brightness, 0-1 |
+| `critters` | true | Critters that farm, fetch water and build |
+| `critter_max` | 24 | Most critters alive at once (1-32) |
+| `kana_url` | `http://127.0.0.1:8080` | The kana practice platform; empty turns kana rewards off |
+| `pixelorama_config` | `~/.local/share/pixelorama/config.ini` | Pixelorama's settings; empty turns drawing rewards off |
 
 Any setting can be overridden for a single run with
 `--set key=value`.
@@ -97,7 +106,7 @@ Mouse on the desktop: left-drag adds sand, right-drag adds stone,
 middle-drag erases.
 
 Keys (when the window has focus): `r` resets, `d` drains now, `s` drops a
-seed, `l` strikes lightning, `space` pauses, `q`/`Esc` quits.
+seed, `l` strikes lightning, `c` drops a critter, `space` pauses, `q`/`Esc` quits.
 
 ```
 sandbg --windowed        # run in a normal window, for trying it out
@@ -105,11 +114,66 @@ sandbg --weather         # print the current weather and the rain rate it gives
 sandbg --meter           # live audio level, as the blaster sees it
 sandbg --spotify         # what Spotify is playing, and each finished song
 sandbg --strike          # fire one lightning strike at the running copy
+sandbg --critter         # drop a critter into the running copy
+sandbg --progress        # what earns critters: kana sets, drawings, critters waiting
 sandbg --keyboard        # show the Keychron LED interface and keymap status
 sandbg --keyboard-preview  # run with the LED colors drawn in the terminal
 sandbg --profile         # print frame timings every 5 seconds
 sandbg --help            # all flags
 ```
+
+## Critters
+
+Finished kana sets and new Pixelorama drawings drop tiny critters in from
+the top (`c` drops one by hand). Small ones are 1x2 cells and cheap to
+feed; large ones are 2x3 and do the heavy work: they mine iron, and toss
+more sand. They live off the land:
+
+- **Food:** they eat moss and wheat. A full stomach lasts about 40 minutes
+  of visible time (small ones last longer); empty, they crumple into grey
+  bodies that rot into dirt.
+- **Farming:** water poured on moss turns it into wheat and stocks it with
+  food. Only critters do this; rain never makes wheat. With no earth
+  around, a critter plants a seed it carries, and pours water on dirt to
+  grow moss the way rain does.
+- **Water:** sand swallows raindrops at once, so critters sprint under
+  falling drops to catch them, carry puddle water, and keep it in a
+  covered well, where it never dries up. Rain on a hut's or well's roof
+  runs down a gutter into the well, so wells are built as wide as the
+  ground allows.
+- **Building:** with nothing else to do on its patch, a critter usually
+  presses sand into dirt, a grain every half minute (otherwise it
+  strolls). New critters drop in by an existing critter's patch, live
+  there, and plant their seed at its end to widen it; a colony's second
+  critter then only moves sand. Dirt and fallen debris are its bricks, and large critters
+  mine iron; nobody digs into a ledge's stone. They build a small well on
+  their patch's iron, before most other jobs. Built on iron, it comes
+  through the drain with its water. A well is a cistern: water resting
+  on its roof seeps in, and loose water nearby slowly drifts toward it.
+  Sand that gets in falls on through its floor. New critters drop in over stone or
+  iron when there is some. Each critter arrives with a seed, and sprints to
+  catch any that falls near it. It plants a seed on a stone ledge,
+  turning a short stretch of it to iron that never rusts, with dirt on
+  top, and a short shower falls there to grow moss on it. Critters stay
+  near their patch and keep back from its edges; when the screen is
+  nearly full they get onto their patch's iron, which comes through the
+  drain, and wait. Stranded below its floating ledge, they build brick
+  stairs up to it out of sand, a hop apart (critters hop up to 3 cells), which crumble back into sand after about
+  20 minutes. Brick pressed from dirt lasts until the drain. Otherwise
+  iron comes only from
+  lightning, so from git commits. An all-iron hut keeps its critters, and
+  the field and well water joined to it, through the drain; everyone else
+  walks off the screen and comes back at the next fill.
+- **Holding the fill:** a home with wheat holds the fill like a living
+  tree, and critters near a side edge toss sand off the screen to make
+  the hold last longer, up to about four times as long. A critter with
+  no home clears the sand off the nearest stone ledge, flinging it past
+  the ledge's end.
+- **Lightning:** a strike near a critter supercharges it for ten minutes:
+  three times as fast at everything.
+
+Sand streams part around critters, so a stream can't pour straight onto
+one, but a pile can still bury them.
 
 ## Keyboard LEDs
 
@@ -156,7 +220,10 @@ other models would need their LED layout added to `keyboard.c`.
 
 Your configured location is sent to Open-Meteo every 10 minutes. Nothing
 else leaves the machine: audio levels are read from PulseAudio and Spotify
-is read over D-Bus, both locally.
+is read over D-Bus, the kana platform's database is read over HTTP at
+`kana_url` (localhost by default), and Pixelorama's config.ini is read for
+newly saved drawings, all locally. What's been counted is kept in
+`~/.local/state/sandbg/progress`.
 
 ## Limitations
 

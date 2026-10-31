@@ -12,6 +12,7 @@
 #include "audio.h"
 #include "config.h"
 #include "keyboard.h"
+#include "progress.h"
 #include "render.h"
 #include "sim.h"
 #include "spotify.h"
@@ -31,6 +32,9 @@
  * one per commit), and they go off at least this far apart. */
 #define LIGHTNING_BACKLOG 5
 #define LIGHTNING_GAP_MS  400
+
+/* Earned critters drop in at least this far apart. */
+#define CRITTER_GAP_MS    2000
 
 /* Blaster level smoothing per frame: jump up fast on hits, fall slowly. */
 #define LEVEL_ATTACK    0.6f
@@ -58,11 +62,39 @@ static void listen_for_strikes(int on)
     sigaction(SIGUSR1, &sa, NULL);
 }
 
+/* One per SIGUSR2, which `sandbg --critter` sends. */
+static volatile sig_atomic_t critters_requested;
+
+static void on_critter(int sig)
+{
+    (void)sig;
+    critters_requested++;
+}
+
+/* SIGUSR2 would kill us too, so it's always handled or ignored. */
+static void listen_for_critters(int on)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = on ? on_critter : SIG_IGN;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGUSR2, &sa, NULL);
+}
+
 /* --strike: signal the running copy, as the git hook does. pkill never
  * matches itself, and exec replaces this sandbg process with it. */
 static int send_strike(void)
 {
     execlp("pkill", "pkill", "-USR1", "-x", "sandbg", (char *)NULL);
+    perror("pkill");
+    return 1;
+}
+
+/* --critter: likewise, with SIGUSR2. */
+static int send_critter(void)
+{
+    execlp("pkill", "pkill", "-USR2", "-x", "sandbg", (char *)NULL);
     perror("pkill");
     return 1;
 }
@@ -85,12 +117,14 @@ static void usage(const char *prog)
            "  --weather         print current weather and the rain it gives, then exit\n"
            "  --spotify         show what Spotify is playing and each finished song\n"
            "  --strike          make the running sandbg fire a bolt of lightning\n"
+           "  --critter         make the running sandbg drop in a critter\n"
+           "  --progress        show the kana sets and drawings that earn critters\n"
            "  --keyboard        show the Keychron LEDs and whether the keymap is loaded\n"
            "  --keyboard-preview  draw a colored keyboard map in the terminal\n"
            "\n"
            "mouse: left-drag = sand, right-drag = stone, middle-drag = erase\n"
            "keys:  r = reset, d = drain now, s = drop a seed, l = lightning,\n"
-           "       space = pause, q/esc = quit\n",
+           "       c = drop a critter, space = pause, q/esc = quit\n",
            prog, config_default_path());
 }
 
@@ -200,7 +234,7 @@ int main(int argc, char **argv)
 {
     int mode = MODE_DESKTOP;
     unsigned long wid = 0;
-    int profile = 0, show_weather = 0, show_keyboard = 0;
+    int profile = 0, show_weather = 0, show_keyboard = 0, show_progress = 0;
     Config cfg;
     config_defaults(&cfg);
 
@@ -220,7 +254,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         const char *next = i + 1 < argc ? argv[i + 1] : NULL;
-        char kv[128];
+        char kv[1280];  /* room for a long path */
         int r = 0;
 
         if (strcmp(arg, "--config") == 0 && next) {
@@ -242,12 +276,16 @@ int main(int argc, char **argv)
             cfg.audio = 0;
         } else if (strcmp(arg, "--weather") == 0) {
             show_weather = 1;
+        } else if (strcmp(arg, "--progress") == 0) {
+            show_progress = 1;
         } else if (strcmp(arg, "--profile") == 0) {
             profile = 1;
         } else if (strcmp(arg, "--meter") == 0) {
             return run_meter(cfg.audio_sink);
         } else if (strcmp(arg, "--strike") == 0) {
             return send_strike();
+        } else if (strcmp(arg, "--critter") == 0) {
+            return send_critter();
         } else if (strcmp(arg, "--keyboard") == 0) {
             show_keyboard = 1;
         } else if (strcmp(arg, "--keyboard-preview") == 0) {
@@ -291,6 +329,8 @@ int main(int argc, char **argv)
         return run_weather(&cfg);
     if (show_keyboard)
         return keyboard_probe(cfg.keyboard_device);
+    if (show_progress)
+        return progress_print(cfg.kana_url, cfg.pixelorama_config);
 
     if (mode == MODE_DESKTOP && take_desktop_lock() != 0) {
         fprintf(stderr, "sandbg is already running on the desktop\n");
@@ -298,6 +338,7 @@ int main(int argc, char **argv)
     }
 
     listen_for_strikes(cfg.lightning);
+    listen_for_critters(cfg.critters);
 
     /* SDL blocks the screensaver by default; a wallpaper shouldn't. */
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
@@ -349,6 +390,15 @@ int main(int argc, char **argv)
     sim.tree_minutes = cfg.tree_minutes;
     sim.tree_thirst_minutes = cfg.tree_thirst_minutes;
     sim.drain_overfill = cfg.drain_overfill;
+    sim.steps_per_sec = cfg.fps * cfg.steps_per_frame;
+    sim.critters_on = cfg.critters;
+    sim.critter_max = cfg.critter_max;
+#ifdef MAX_CRITTERS
+    if (sim.critter_max > MAX_CRITTERS)
+        sim.critter_max = MAX_CRITTERS;
+#endif
+    sim.starve_minutes = cfg.critter_starve_minutes;
+    sim.wheat_per_pour = cfg.wheat_per_pour;
 
     if (cfg.audio) {
         if (audio_start(cfg.audio_sink) == 0)
@@ -369,6 +419,8 @@ int main(int argc, char **argv)
     int use_spotify = 0, seeds_dropped = 0;
     /* Likewise strikes waiting are strikes_requested - strikes_fired. */
     int strikes_fired = 0;
+    /* And critters waiting are critters_requested - critters_sent. */
+    int critters_sent = 0;
     Uint64 next_strike = 0;
     if (cfg.spotify_seeds) {
         if (spotify_start() == 0)
@@ -376,6 +428,11 @@ int main(int argc, char **argv)
         else
             fprintf(stderr, "spotify: %s (continuing without)\n", SDL_GetError());
     }
+
+    /* Critters earned by kana sets and drawings. */
+    int use_progress = cfg.critters &&
+        progress_start(cfg.kana_url, cfg.pixelorama_config) == 0;
+    Uint64 next_reward = 0;
 
     float steps_per_min = 60.0f * cfg.fps * cfg.steps_per_frame;
     if (cfg.rain_override >= 0)
@@ -420,6 +477,10 @@ int main(int argc, char **argv)
                 case SDLK_d:     sim_start_drain(&sim); break;
                 case SDLK_s:     sim_drop_seed(&sim); break;
                 case SDLK_l:     sim_strike(&sim); break;
+                case SDLK_c:
+                    if (sim.critters_on)
+                        sim_add_critter(&sim, CR_ANY);
+                    break;
                 case SDLK_SPACE: paused = !paused; break;
                 }
             }
@@ -474,6 +535,20 @@ int main(int argc, char **argv)
                 sim_strike(&sim);
                 strikes_fired++;
                 next_strike = start + LIGHTNING_GAP_MS;
+            }
+            /* Dropped straight away. One with no free slot is dropped
+             * anyway: --critter is for testing, not a reward. */
+            int crit = critters_requested;
+            for (; critters_sent < crit; critters_sent++)
+                sim_add_critter(&sim, CR_ANY);
+
+            /* An earned critter waits its turn, and for a free slot. */
+            int kind = use_progress && start >= next_reward ? progress_next()
+                                                            : PROGRESS_NONE;
+            if (kind != PROGRESS_NONE) {
+                if (sim_add_critter(&sim, kind) >= 0)
+                    progress_dropped();
+                next_reward = start + CRITTER_GAP_MS;
             }
         }
 

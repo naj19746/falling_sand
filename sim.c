@@ -3,23 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sim_internal.h"
+
 /* Drain timing, in simulation steps (~60 per second). */
 #define DRAIN_OPEN_STEPS    1200    /* floor gap grows to full width */
 #define DRAIN_CRUMBLE_AFTER 600     /* ledges start crumbling */
 #define DRAIN_MAX_STEPS     4800    /* give up and clear whatever is left */
 
-/* A chunk keeps being scanned this many steps after its last change. */
-#define WAKE_STEPS 2
-
-/* Moss clings: it only falls when everything in the HOLD_GAP-deep,
- * 3-wide block under it is open. Its roots hold dirt up to ROOT_DEPTH
- * cells below it the same way. */
-#define HOLD_GAP   3
-#define ROOT_DEPTH 3
-
-/* Water: how far it looks sideways for somewhere lower to flow to, and the
- * most of the screen it may cover before rain stops adding more. */
-#define WATER_SPREAD 4
+/* The most of the screen water may cover before rain stops adding more. */
 #define WATER_CAP    0.10f
 
 /* Wet dirt dries after WET_SECS; moss dries back to wet dirt MOSS_SECS
@@ -28,6 +19,16 @@
  * per RAIN_TILE x RAIN_TILE block of cells. */
 #define WET_SECS    (10 * 60)
 #define MOSS_SECS   (30 * 60)
+
+/* Wheat nobody has poured on loses a level this often, in sim time. */
+#define WHEAT_ROT_SECS (3 * 3600)
+
+/* A brick a critter pressed from sand crumbles back after this long, in
+ * sim time. */
+#define SAND_BRICK_SECS (20 * 60)
+
+/* A dead critter's body rots into dirt after this long. */
+#define BODY_ROT_SECS (30 * 60)
 
 /* A drop soaking into dirt wets the dirt within WET_SPOT cells of where it
  * landed (and keeps wet dirt there wet); a drop landing on wet dirt grows
@@ -53,6 +54,9 @@
  * the shortest segment a bolt's path is split down to. */
 #define STRIKE_TRIES 64
 #define BOLT_MIN_SEG 2
+
+/* Emitters don't pour within this many columns of a critter. */
+#define CRITTER_SHELTER 1
 
 /* While a tree holds off the drain, emitters pour at 1/HOLD_POUR_DIV of
  * their usual rate, and every OVERFILL_STEPS the screen is checked against
@@ -81,54 +85,9 @@
 #define DEAD_JITTER 120
 #define FALL_SECS   300
 
-static uint32_t rnd(Sim *s)
-{
-    /* xorshift32 */
-    uint32_t x = s->rng;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return s->rng = x;
-}
-
-static float rndf(Sim *s)
-{
-    return (rnd(s) & 0xFFFFFF) / (float)0x1000000;
-}
-
 static int grain_color(Sim *s)
 {
     return ((int)s->hue + (int)(rnd(s) % 9) - 4) & 0xFF;
-}
-
-/* Something changed at (x, y): keep its chunk awake and redraw it. A cell
- * near a chunk edge also wakes the neighbor across that edge, since grains
- * there may now be free to move. The band covers water's sideways reach,
- * which is longer than a grain's two-cell slip. Held moss looks HOLD_GAP
- * rows down and roots reach ROOT_DEPTH rows down, so near the top or bottom
- * the chunk above or below is woken too. */
-static inline void mark(Sim *s, int x, int y)
-{
-    int cx = x >> CHUNK_SHIFT, cy = y >> CHUNK_SHIFT;
-    int lx = x & (CHUNK - 1), ly = y & (CHUNK - 1);
-    int c = cy * s->cw + cx;
-    s->changed[c] = 1;
-    /* Most cells are well inside their chunk: no neighbors to wake. */
-    if (lx >= WATER_SPREAD && lx < CHUNK - WATER_SPREAD &&
-        ly >= HOLD_GAP && ly < CHUNK - ROOT_DEPTH) {
-        s->awake[c] = WAKE_STEPS;
-        return;
-    }
-    int x0 = cx - (lx < WATER_SPREAD), x1 = cx + (lx >= CHUNK - WATER_SPREAD);
-    int y0 = cy - (ly < HOLD_GAP),     y1 = cy + (ly >= CHUNK - ROOT_DEPTH);
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 >= s->cw) x1 = s->cw - 1;
-    if (y1 >= s->ch) y1 = s->ch - 1;
-
-    for (int j = y0; j <= y1; j++)
-        for (int i = x0; i <= x1; i++)
-            s->awake[j * s->cw + i] = WAKE_STEPS;
 }
 
 static void wake_all(Sim *s)
@@ -137,47 +96,13 @@ static void wake_all(Sim *s)
     memset(s->changed, 1, (size_t)s->cw * s->ch);
 }
 
-/* Every write that isn't a plain move goes through here, so the grain and
- * solid totals stay right without recounting the grid. */
-static void set_cell(Sim *s, int x, int y, uint16_t v)
-{
-    int idx = y * s->w + x;
-    uint16_t *cell = &s->cells[idx];
-    int old = CELL_TYPE(*cell), new = CELL_TYPE(v);
-    s->grains += FALLS(new) - FALLS(old);
-    s->solids += SOLID(new) - SOLID(old);
-    s->glass  += (new == GLASS) - (old == GLASS);
-    s->iron   += (new == IRON) - (old == IRON);
-    s->water  += (new == WATER) - (old == WATER);
-    s->damp   += DAMP(new) - DAMP(old);
-    if (DAMP(new))
-        s->since[idx] = s->clock;
-    *cell = v;
-    /* The kept mask follows the type: a kept cell that turns into
-     * something else iron holds (wet dirt drying, moss sprouting a trunk)
-     * stays kept, and the kept totals move with it so the end-of-drain
-     * check stays right. New iron is always kept. */
-    if (s->keep && s->keep[idx]) {
-        if (new == IRON || HELD_BY_IRON(new)) {
-            s->kept_grains += FALLS(new) - FALLS(old);
-            s->kept_solids += SOLID(new) - SOLID(old);
-        } else {
-            s->keep[idx] = 0;
-            s->kept_grains -= FALLS(old);
-            s->kept_solids -= SOLID(old);
-        }
-    } else if (s->keep && new == IRON) {
-        s->keep[idx] = 1;
-    }
-    mark(s, x, y);
-}
-
 static inline int drain_immune(const Sim *s, int x, int y)
 {
     return s->keep ? s->keep[y * s->w + x] : 0;
 }
 
-/* Mark iron and every earth or tree cell connected to it. Runs once per drain. */
+/* Mark iron and every earth or tree cell, or stone critters built, connected
+ * to it. Runs once per drain. */
 static void mark_kept(Sim *s)
 {
     int n = 0, w = s->w;
@@ -194,7 +119,11 @@ static void mark_kept(Sim *s)
                       y > 0 ? i - w : -1, y < s->h - 1 ? i + w : -1 };
         for (int k = 0; k < 4; k++) {
             int j = nb[k];
-            if (j < 0 || s->keep[j] || !HELD_BY_IRON(CELL_TYPE(s->cells[j])))
+            /* Earth and trees joined to iron, and anything critters built
+             * on it. */
+            if (j < 0 || s->keep[j] ||
+                !(HELD_BY_IRON(CELL_TYPE(s->cells[j])) ||
+                  (CELL_TYPE(s->cells[j]) == STONE && (CELL_COLOR(s->cells[j]) & BUILT))))
                 continue;
             s->keep[j] = 1;
             s->stack[n++] = j;
@@ -233,9 +162,11 @@ static uint32_t rain_near(Sim *s, int x, int y)
 }
 
 /* Visit every SWEEP_ROWS-th row, a different set each step, drying out
- * wet dirt and moss whose time is up. Works on sleeping chunks too. */
+ * wet dirt and moss whose time is up, rotting bodies into dirt and
+ * crumbling sand bricks. Works on sleeping chunks too. */
 static void age_damp(Sim *s)
 {
+    uint32_t now = s->frame / (uint32_t)s->steps_per_sec;
     for (int y = s->frame % SWEEP_ROWS; y < s->h; y += SWEEP_ROWS) {
         uint16_t *row = s->cells + y * s->w;
         uint32_t *since = s->since + y * s->w;
@@ -249,23 +180,24 @@ static void age_damp(Sim *s)
                     since[x] = rained;      /* check again 30 min after it */
                 else
                     set_cell(s, x, y, CELL(WET_DIRT, CELL_COLOR(row[x])));
+            } else if (t == WHEAT && now - since[x] >= WHEAT_ROT_SECS) {
+                /* Unwatered wheat fades a level at a time, back to moss.
+                 * Its time is in sim seconds: it doesn't rot overnight. */
+                int k = WHEAT_STOCK(row[x]);
+                uint32_t next = since[x] + WHEAT_ROT_SECS;
+                if (k > 0)
+                    set_cell(s, x, y, CELL(WHEAT, CELL_COLOR(row[x]) - 1));
+                else
+                    set_cell(s, x, y, CELL(MOSS, CELL_COLOR(row[x]) & ~WHEAT_MAX));
+                since[x] = k > 0 ? next : s->clock;
+                s->rotted += k > 0;
+            } else if (t == BODY && s->clock - since[x] >= BODY_ROT_SECS) {
+                set_cell(s, x, y, CELL(DIRT, rnd(s) & 0xFF));
+            } else if (IS_SAND_BRICK(row[x]) && now - since[x] >= SAND_BRICK_SECS) {
+                set_cell(s, x, y, CELL(SAND, grain_color(s)));
             }
         }
     }
-}
-
-/* Cells of falling stuff or water stacked on (x, y), up to the first gap
- * or static cell (which carries its own weight). */
-static int load_on(Sim *s, int x, int y)
-{
-    int n = 0;
-    for (int yy = y - 1; yy >= 0; yy--) {
-        int t = CELL_TYPE(s->cells[yy * s->w + x]);
-        if (!LOOSE(t))
-            break;
-        n++;
-    }
-    return n;
 }
 
 /* Glass at (x, y) gave way: it shatters, and the crack runs sideways
@@ -311,7 +243,7 @@ static void place_ledges(Sim *s)
                 if (yy >= 0 && yy < s->h) {
                     int idx = yy * s->w + (x0 + dx);
                     if (CELL_TYPE(s->cells[idx]) == EMPTY && !(s->keep && s->keep[idx]))
-                        set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0xFF));
+                        set_cell(s, x0 + dx, yy, CELL(STONE, rnd(s) & 0x7F));
                 }
             }
         }
@@ -338,6 +270,11 @@ int sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters)
     s->tree_minutes = 30;
     s->tree_thirst_minutes = 22;
     s->drain_overfill = 0.8f;
+    s->steps_per_sec = 60;
+    s->critters_on = 1;
+    s->critter_max = 24;
+    s->starve_minutes = 40;
+    s->wheat_per_pour = 3;
     s->rw = (w + RAIN_TILE - 1) / RAIN_TILE;
     s->rh = (h + RAIN_TILE - 1) / RAIN_TILE;
     s->cells   = calloc((size_t)w * h, sizeof *s->cells);
@@ -366,6 +303,10 @@ void sim_free(Sim *s)
     free(s->rain_at);
     free(s->keep);
     free(s->stack);
+    for (int k = 0; k < FAR_LISTS; k++) {
+        free(s->far[k].cell);
+        s->far[k].cell = NULL;
+    }
     s->moved = NULL;
     s->since = s->rain_at = NULL;
     s->cells = NULL;
@@ -377,9 +318,11 @@ void sim_reset(Sim *s)
     memset(s->cells, 0, (size_t)s->w * s->h * sizeof *s->cells);
     if (s->keep) memset(s->keep, 0, (size_t)s->w * s->h);
     s->grains = s->solids = s->water = s->damp = s->glass = s->iron = 0;
+    s->wheat = s->bodies = s->bricks = s->seeds = 0;
     s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;
+    reset_critters(s);
     wake_all(s);
     for (int i = 0; i < s->n_emitters; i++) {
         s->em[i].burst_left = 0;
@@ -388,7 +331,8 @@ void sim_reset(Sim *s)
     }
     s->phase = PHASE_FILL;
     s->drain_steps = 0;
-    s->stall_steps = s->stall_tried = s->stall_grains = 0;
+    s->stall_steps = s->stall_tried = s->stall_grains = s->stall_poured = s->toss_window = 0;
+    s->held = 0;
     place_ledges(s);
 }
 
@@ -428,7 +372,8 @@ static void rust_iron(Sim *s)
             continue;
         for (int k = 0; k < tail; k++) {
             int j = s->stack[k];
-            set_cell(s, j % w, j / w, CELL(STONE, CELL_COLOR(s->cells[j])));
+            if (!(CELL_COLOR(s->cells[j]) & SEEDED))
+                set_cell(s, j % w, j / w, CELL(STONE, CELL_COLOR(s->cells[j])));
         }
     }
 }
@@ -440,9 +385,13 @@ static void clear_unkept(Sim *s)
         if (s->keep && s->keep[i])
             continue;
         int t = CELL_TYPE(s->cells[i]);
-        if (t != EMPTY)
+        if (t == WATER && well_holds(s, i % s->w, i / s->w))
+            continue;
+        if (t != EMPTY && t != CRITTER)
             set_cell(s, i % s->w, i / s->w, CELL(EMPTY, 0));
     }
+    if (s->critters)
+        critters_refill(s);
     for (int i = 0; i < s->n_emitters; i++) {
         s->em[i].burst_left = 0;
         s->em[i].idle_left = i * 60 + (int)(rnd(s) % 60);
@@ -455,8 +404,9 @@ static void clear_unkept(Sim *s)
     memset(s->keep, 0, (size_t)s->w * s->h);
     s->kept_grains = 0;
     s->kept_solids = 0;
-    s->stall_steps = s->stall_tried = 0;
+    s->stall_steps = s->stall_tried = s->stall_poured = s->toss_window = 0;
     s->stall_grains = s->grains;
+    s->held = 0;
     wake_all(s);
     place_ledges(s);
 }
@@ -467,7 +417,10 @@ void sim_start_drain(Sim *s)
         return;
     s->phase = PHASE_DRAIN;
     s->drain_steps = 0;
+    s->held = 0;
     mark_kept(s);
+    if (s->critters)
+        critters_drain(s);
     /* Keep trees whose base cell is kept; drop the rest. */
     int nt = 0;
     for (int i = 0; i < MAX_TREES; i++) {
@@ -525,6 +478,19 @@ static void wander(Sim *s, float *x, float *v, float jitter, float vmax,
     if (*x > s->w - 3)   { *x = s->w - 3;   *v = -*v; }
 }
 
+/* A stream parts around critters: no grain is poured right over one, or
+ * the emitters would bury them faster than they could ever dig. */
+static int under_critter(const Sim *s, int x)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        const Critter *c = &s->crit[i];
+        if (c->state != CR_FREE && c->state != CR_AWAY &&
+            x >= c->x - CRITTER_SHELTER && x < c->x + c->w + CRITTER_SHELTER)
+            return 1;
+    }
+    return 0;
+}
+
 /* Pours 1 in div of the grains it otherwise would. */
 /* Adds how many grains it tried to pour (not counting ones skipped by the
  * trickle) to *tried. */
@@ -549,8 +515,12 @@ static void emit(Sim *s, Emitter *e, int div, int *tried)
         if (x < 0 || x >= s->w)
             continue;
         (*tried)++;
-        if (CELL_TYPE(s->cells[x]) == EMPTY)
+        if (s->critters && under_critter(s, x))
+            continue;
+        if (CELL_TYPE(s->cells[x]) == EMPTY) {
             set_cell(s, x, 0, CELL(SAND, grain_color(s)));
+            s->stall_poured++;
+        }
     }
 }
 
@@ -632,7 +602,7 @@ static void crumble(Sim *s)
             else if (TREE(t))
                 set_cell(s, x, y, CELL(DIRT, CELL_COLOR(row[x])));
             else
-                set_cell(s, x, y, CELL(t == GLASS ? SHARD : DEBRIS, CELL_COLOR(row[x])));
+                set_cell(s, x, y, CELL(t == GLASS ? SHARD : DEBRIS, CELL_COLOR(row[x]) & ~BUILT));
         }
     }
 }
@@ -662,6 +632,8 @@ static void evaporate(Sim *s)
             continue;
         int x = idx % s->w, y = idx / s->w;
         if (y > 0 && CELL_TYPE(s->cells[idx - s->w]) != EMPTY)
+            continue;
+        if (in_well(s, x, y))
             continue;
         if ((rnd(s) & 1023) < chance)
             set_cell(s, x, y, CELL(EMPTY, 0));
@@ -706,22 +678,6 @@ static void drain(Sim *s)
         clear_unkept(s);
 }
 
-/* Move a cell from (x, y) to (nx, y + 1), swapping with what was there
- * (empty, or water that a sinking grain displaces upward). Its drying
- * time goes with it. */
-static inline void move(Sim *s, uint16_t *row, uint16_t *next, int x, int nx, int y)
-{
-    uint16_t c = row[x];
-    row[x] = next[nx];
-    next[nx] = c;
-    /* Only wet dirt and moss read their time, and what they swap with
-     * (empty, water, or sand under seeping water) never does. */
-    if (DAMP(CELL_TYPE(c)))
-        s->since[(y + 1) * s->w + nx] = s->since[y * s->w + x];
-    mark(s, x, y);
-    mark(s, nx, y + 1);
-}
-
 /* Through iron and what it holds, per step out of 1024. Ramps up over
  * the drain so the rest of the pile sifts out as the floor opens. */
 static inline uint32_t phase_chance(const Sim *s)
@@ -731,13 +687,6 @@ static inline uint32_t phase_chance(const Sim *s)
     return (uint32_t)c;
 }
 
-/* Sand and debris sink through water. */
-static inline int sand_can_enter(uint16_t c)
-{
-    int t = CELL_TYPE(c);
-    return t == EMPTY || (t == WATER && !(CELL_COLOR(c) & SEEPING));
-}
-
 /* Keep a chunk scanned without redrawing it. */
 static inline void stay_awake(Sim *s, int x, int y)
 {
@@ -745,8 +694,9 @@ static inline void stay_awake(Sim *s, int x, int y)
 }
 
 /* A drop soaked into the dirt at (cx, cy): wet the dirt around it, or if it
- * was already wet there, grow moss on the wet dirt around it. */
-static void soak(Sim *s, int cx, int cy, int dry)
+ * was already wet there, grow moss on the wet dirt around it. Critters
+ * pour water on dirt the same way (critter.c). */
+void soak(Sim *s, int cx, int cy, int dry)
 {
     int r = dry ? WET_SPOT : MOSS_SPOT;
     for (int y = cy - r; y <= cy + r; y++) {
@@ -794,7 +744,7 @@ static void through_moss(Sim *s, int x, int y)
     int yy = y + 1;
     for (; yy < s->h; yy++) {
         int t = CELL_TYPE(s->cells[yy * s->w + x]);
-        if (t != MOSS && t != LEAF && t != WOOD)
+        if (!MOSSY(t) && t != LEAF && t != WOOD)
             break;
     }
     if (yy >= s->h)
@@ -828,6 +778,8 @@ static void phase_through(Sim *s, uint16_t *row, int x, int y)
     int w = s->w;
     if (s->phase != PHASE_DRAIN || y + 1 >= s->h || !s->keep[(y + 1) * w + x])
         return;
+    if (CELL_TYPE(row[x]) == WATER && well_holds(s, x, y))
+        return;                             /* it stays in the well */
     stay_awake(s, x, y);
     if ((rnd(s) & 1023) >= phase_chance(s))
         return;
@@ -846,7 +798,7 @@ static void phase_through(Sim *s, uint16_t *row, int x, int y)
     uint16_t c = row[x];
     row[x] = s->cells[j];
     s->cells[j] = c;
-    if (DAMP(CELL_TYPE(c)))
+    if (AGES(CELL_TYPE(c)))
         s->since[j] = s->since[y * w + x];
     if (CELL_TYPE(c) == WATER) {
         s->moved[j] = (uint8_t)s->frame;
@@ -870,8 +822,12 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
     }
 
     int below = CELL_TYPE(next[x]);
-    if (below != EMPTY)
+    if (below != EMPTY) {
+        int fresh = CELL_COLOR(row[x]) & RAIN_FRESH;
         land(s, &row[x], x, y);
+        if (fresh && s->critters && gutter(s, x, y))
+            return;
+    }
 
     /* A tree lets drops through its canopy and trunk; its roots drink. */
     if (below == LEAF || below == WOOD) {
@@ -895,10 +851,10 @@ static void update_water(Sim *s, uint16_t *row, uint16_t *next, int x, int y)
      * awake until it has soaked in; water that fails the roll this step
      * still spreads as usual if it's on the surface. */
     int seeping = CELL_COLOR(row[x]) & SEEPING;
-    if (below == SAND || below == MOSS) {
+    if (below == SAND || MOSSY(below)) {
         uint32_t chance = below == SAND ? SEEP_SAND : SEEP_MOSS;
         if ((rnd(s) & 1023) < chance) {
-            if (below == MOSS) {
+            if (MOSSY(below)) {
                 through_moss(s, x, y);
             } else if (y + 1 == s->h - 1) {     /* into the ground */
                 set_cell(s, x, y, CELL(EMPTY, 0));
@@ -1049,7 +1005,7 @@ static int rooted(Sim *s, int x, int y)
         return 1;
     for (int i = 1; i <= ROOT_DEPTH && y - i >= 0; i++) {
         int t = CELL_TYPE(s->cells[(y - i) * s->w + x]);
-        if (t == MOSS)
+        if (MOSSY(t))
             return 1;
         if (t != DIRT && t != WET_DIRT)
             return 0;
@@ -1082,6 +1038,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
     int t = CELL_TYPE(row[x]);
     switch (t) {
     case EMPTY: case STONE: case IRON: case GLASS: case WOOD: case LEAF: case ROOT:
+    case CRITTER:
         break;
     case WATER:
         update_water(s, row, next, x, y);
@@ -1089,7 +1046,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
     case SEED:
         update_seed(s, row, next, x, y);
         break;
-    case DIRT: case WET_DIRT: case MOSS:
+    case DIRT: case WET_DIRT: case MOSS: case WHEAT:
         /* During the drain, kept earth stays put. Other earth stops
          * clinging once the floor is open, or straight away when it rests
          * on a kept cell: kept roots, moss and iron never crumble, so what
@@ -1103,7 +1060,7 @@ static inline void update_cell(Sim *s, uint16_t *row, uint16_t *next, int x, int
                 break;
             }
         }
-        if (t == MOSS) {
+        if (MOSSY(t)) {
             if (open_below(s, x, y))        /* held: straight down or not at all */
                 move(s, row, next, x, x, y);
             break;
@@ -1253,7 +1210,7 @@ static void grow_up(Sim *s, Tree *t)
 /* Soft ground a root can grow into (or along its own length). */
 static int root_soil(int c)
 {
-    return c == DIRT || c == WET_DIRT || c == SAND || c == MOSS || c == SHARD || c == ROOT;
+    return c == DIRT || c == WET_DIRT || c == SAND || MOSSY(c) || c == SHARD || c == ROOT;
 }
 
 /* Root r creeps one cell, sideways its own way about twice as often as
@@ -1451,10 +1408,11 @@ void sim_step(Sim *s)
         s->hue -= 256.0f;
 
     if (s->phase == PHASE_FILL) {
-        /* A living tree holds off the drain: pour at a trickle instead,
-         * until the screen is overfull. */
+        /* A living tree or a farmed field holds off the drain: pour at a
+         * trickle instead, until the screen is overfull. */
         int full = s->grains >= (int)(s->fill_reset * s->w * s->h);
-        int hold = full && s->trees > 0;
+        int hold = full && (s->trees > 0 || s->farms > 0);
+        s->held = hold;
         int tried = 0;
         for (int i = 0; i < s->n_emitters; i++)
             emit(s, &s->em[i], hold ? HOLD_POUR_DIV : 1, &tried);
@@ -1463,9 +1421,11 @@ void sim_step(Sim *s)
         if (++s->stall_steps >= STALL_STEPS) {
             /* A held tree's trickle grows slower, so expect less of it. */
             float gain = STALL_GAIN / (hold ? HOLD_POUR_DIV : 1);
+            /* Grains critters tossed off the screen count as poured, so
+             * their keeping up doesn't look like a stalled fill. */
             stalled = s->stall_tried > 0 &&
-                      s->grains - s->stall_grains < (int)(gain * s->w * s->h);
-            s->stall_steps = s->stall_tried = 0;
+                      s->grains + s->toss_window - s->stall_grains < (int)(gain * s->w * s->h);
+            s->stall_steps = s->stall_tried = s->stall_poured = s->toss_window = 0;
             s->stall_grains = s->grains;
         }
         if ((full && !hold) || stalled)
@@ -1482,12 +1442,16 @@ void sim_step(Sim *s)
         evaporate(s);
         drain_floor(s);
     }
-    if (s->damp)
+    if (s->damp || s->bodies || s->bricks)
         age_damp(s);
     if (s->glass)
         load_glass(s);
     if (s->trees)
         update_trees(s);
+    if (s->critters)
+        update_critters(s);
+    else
+        s->farms = 0;
 
     if (s->blaster_on || s->lightning_on)
         blaster_move(s);
@@ -1537,12 +1501,14 @@ void sim_paint(Sim *s, int cx, int cy, int radius, int type)
             if (dx * dx + dy * dy > radius * radius)
                 continue;
             uint16_t cell = s->cells[y * s->w + x];
+            if (CELL_TYPE(cell) == CRITTER)
+                continue;
             if (type == SAND) {
                 /* Sprinkle rather than fill solid. */
                 if (CELL_TYPE(cell) == EMPTY && (rnd(s) & 3) == 0)
                     set_cell(s, x, y, CELL(SAND, grain_color(s)));
             } else if (CELL_TYPE(cell) != type) {
-                set_cell(s, x, y, CELL(type, rnd(s) & 0xFF));
+                set_cell(s, x, y, CELL(type, rnd(s) & (type == IRON ? 0x3F : 0x7F)));
             }
         }
     }
@@ -1611,7 +1577,7 @@ static int strike_target(Sim *s, int ox, int oy, int reach, int *tx, int *ty)
         if (x < 0 || x >= s->w || y < 0 || y >= s->h || dx * dx + dy * dy > reach * reach)
             continue;
         int t = CELL_TYPE(s->cells[y * s->w + x]);
-        if (t != EMPTY && t != WATER && resting(s, x, y)) {
+        if (t != EMPTY && t != WATER && t != CRITTER && resting(s, x, y)) {
             *tx = x;
             *ty = y;
             return 0;
@@ -1670,6 +1636,7 @@ int sim_strike(Sim *s)
         if (b->y[i] > b->box[3]) b->box[3] = b->y[i];
     }
     b->id++;
+    charge_critters(s);
 
     /* The first struck moss with open air, water or loose grains above it
      * becomes a tree; the rest stays as ground cover. The column above the
@@ -1710,9 +1677,9 @@ int sim_strike(Sim *s)
             if (t == SAND && resting(s, x, y))
                 set_cell(s, x, y, CELL(GLASS, CELL_COLOR(c)));
             else if (t == DIRT || t == WET_DIRT)
-                set_cell(s, x, y, CELL(STONE, rnd(s) & 0xFF));
-            else if (t == STONE)
-                set_cell(s, x, y, CELL(IRON, rnd(s) & 0xFF));
+                set_cell(s, x, y, CELL(STONE, rnd(s) & 0x7F));
+            else if (t == STONE)     /* a stone hut stays the critters' */
+                set_cell(s, x, y, CELL(IRON, (rnd(s) & 0x3F) | (CELL_COLOR(c) & BUILT)));
         }
     }
     return 0;

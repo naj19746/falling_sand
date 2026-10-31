@@ -13,9 +13,13 @@
  * GLASS is sand fused by lightning: rigid like stone until too much weight
  * piles on it, then it breaks into SHARD, which falls like sand.
  * WOOD, LEAF and ROOT make up a tree, grown from moss struck by lightning.
+ * CRITTER is a critter's body (critter.c): static, and sand rests on it.
+ * WHEAT is moss a critter has watered; it behaves like moss and holds food.
+ * BODY is what a dead critter leaves: falls like sand, rots into DIRT.
  * Everything from SAND on falls. */
-enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
-       SAND, DEBRIS, SEED, DIRT, WET_DIRT, MOSS, SHARD };
+enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT, CRITTER,
+       SAND, DEBRIS, SEED, DIRT, WET_DIRT, MOSS, WHEAT, SHARD, BODY };
+#define CELL_TYPES 18
 
 /* Each cell: low byte = type, high byte = palette color index. */
 #define CELL(type, color) ((uint16_t)((type) | ((color) << 8)))
@@ -23,10 +27,38 @@ enum { EMPTY, STONE, IRON, WATER, GLASS, WOOD, LEAF, ROOT,
 #define CELL_COLOR(c)     ((c) >> 8)
 #define FALLS(t)          ((t) >= SAND)
 #define SOLID(t)          ((t) == STONE || (t) == GLASS || TREE(t))  /* stone, glass and trees: crumble during drain */
-#define DAMP(t)           ((t) == WET_DIRT || (t) == MOSS)
+#define DAMP(t)           ((t) == WET_DIRT || MOSSY(t))
+#define MOSSY(t)          ((t) == MOSS || (t) == WHEAT)  /* clings like moss */
 #define EARTH(t)          ((t) == DIRT || DAMP(t))    /* the blaster spares these */
 #define HELD_BY_IRON(t)   (EARTH(t) || TREE(t))       /* earth or tree joined to iron */
 #define TREE(t)           ((t) == WOOD || (t) == LEAF || (t) == ROOT)
+
+/* Color bit on stone or iron a critter placed, so critters don't mine
+ * buildings. Everything else that makes stone or iron clears it. */
+#define BUILT             0x80
+
+/* Color bit on iron a critter grew from a seed: it never rusts. Iron
+ * from anywhere else keeps it clear. */
+#define SEEDED            0x40
+
+/* Color bit on built stone a critter pressed from sand (the steps of its
+ * stairs): it crumbles back to sand after a while. Brick from dirt and
+ * stone laid for homes keep it clear and last until the drain. */
+#define SAND_BRICK        0x40
+#define IS_SAND_BRICK(c)  (CELL_TYPE(c) == STONE && \
+                           (CELL_COLOR(c) & (BUILT | SAND_BRICK)) == (BUILT | SAND_BRICK))
+
+/* A wheat cell's color byte: the low bits are how much eating is left in
+ * it, 0 to WHEAT_MAX. */
+#define WHEAT_MAX         7
+#define WHEAT_STOCK(c)    (CELL_COLOR(c) & 7)
+
+/* A critter cell's color byte: the slot in the low 5 bits, the body part
+ * in the top 3. */
+#define CRITTER_CELL(slot, part)  CELL(CRITTER, (slot) | ((part) << 5))
+#define CRITTER_SLOT(c)   (CELL_COLOR(c) & 31)
+#define CRITTER_PART(c)   (CELL_COLOR(c) >> 5)
+enum { PART_HEAD, PART_EYE, PART_BODY, PART_LEG, PART_LEG_ALT, PART_SPARK };
 
 /* Color bit on a leaf that has turned brown on a thirsty tree. */
 #define WITHERED          0x80
@@ -106,6 +138,79 @@ typedef struct {
     int16_t cx[TREE_CELLS], cy[TREE_CELLS];
 } Tree;
 
+/* Critters (critter.c): small creatures with bodies in the grid. Each
+ * keeps its slot from arriving until it dies. */
+#define MAX_CRITTERS 24
+enum { CR_FREE, CR_FALLING, CR_IDLE, CR_WALK, CR_EAT, CR_FETCH, CR_CARRY,
+       CR_MINE, CR_BUILD, CR_DIG, CR_DYING, CR_AWAY };
+typedef struct {
+    int state;
+    int x, y;               /* bottom-left cell of the body */
+    int kind;               /* CR_SMALL (1x2) or CR_LARGE (2x3), for life */
+    int w, h;               /* from kind */
+    int8_t face;            /* -1 left, 1 right */
+    uint8_t step;           /* walking animation */
+    uint8_t spark;          /* charged: body cells drawn as sparks */
+    float food;             /* 0..1; starves at 0 */
+    uint32_t charged_until; /* sim frame; supercharged until then */
+    uint16_t carry;         /* the cell it's holding, or 0 */
+    int goal, tx, ty;       /* what it's doing and where */
+    int stuck;              /* moves without progress toward the goal */
+    int best;               /* closest it has got to the goal */
+    int fails;              /* goals given up on in a row */
+    int avoid_x, avoid_y;   /* a spot it gave up on, */
+    uint32_t avoid_until;   /* left alone until then */
+    uint8_t eating;         /* keeps eating until full */
+    uint8_t dug;            /* digs in place while walking */
+    uint8_t seed;           /* carries a seed, apart from what's in its hands */
+    uint8_t role;           /* ROLE_ALL, or ROLE_SAND: only moves sand */
+    uint8_t has_patch;      /* planted a seed: patch_x, patch_y is on it */
+    int patch_x, patch_y;   /* top of the middle of its patch's iron */
+    uint8_t climbing;       /* clinging to the wall it faces */
+    uint8_t thirsty;        /* has a use for water: catches rain */
+    int home;               /* index into s->home[], or -1 */
+    int ax;                 /* where it strolls around: home, or its food */
+    uint32_t buried_steps;  /* steps spent buried */
+    uint32_t next_think;    /* sim frame of the next decision */
+    uint32_t next_move;     /* sim frame of the next move or fall */
+    uint32_t work_until;    /* sim frame the current bite, dig, ... ends */
+    uint32_t dig_at;        /* sim frame it can next dig up */
+    uint32_t iron_next;     /* sim frame it can next look for iron */
+    uint32_t plant_at;      /* sim frame it can next plant a seed */
+    uint32_t far_next;      /* sim frame it can next look further afield */
+} Critter;
+
+/* A toss of sand off the screen, for the renderer to draw as an arc. */
+typedef struct {
+    uint32_t frame;         /* when it was thrown; 0 = none */
+    int x, y, dir;          /* from where, and which way */
+    uint16_t cell;          /* what was thrown, for its color */
+} Toss;
+
+/* A colony's home: a hut and a well side by side on level ground, with
+ * x its left edge and y the row of both floors. The well is as wide as
+ * the ground allows when the home is planned. The critters build them
+ * cell by cell from the plan in critter.c. */
+#define MAX_HOMES 8
+typedef struct {
+    int used;
+    int x, y;
+    int dir;                /* side the well is on: -1 left, 1 right */
+    int rows;               /* well interior rows */
+    int ww;                 /* well width, walls included; odd */
+    int hut;                /* the hut is in the plan: the well's done */
+    int wx0, wy0, wx1, wy1; /* well interior, inclusive: water never dries there */
+} Home;
+
+/* The matches of one kind of full-screen search (critter.c, find_far()),
+ * shared by every critter for a few seconds. */
+#define FAR_LISTS 4
+typedef struct {
+    uint32_t at;            /* sim frame it was made */
+    int n;
+    int *cell;              /* indexes into cells, in scan order; w*h of room */
+} FarList;
+
 enum { PHASE_FILL, PHASE_DRAIN };
 
 typedef struct {
@@ -131,6 +236,7 @@ typedef struct {
     int stall_steps;        /* fill steps into the current stall window */
     int stall_tried;        /* grains the emitters tried to pour in it */
     int stall_grains;       /* grains when it started */
+    int stall_poured;       /* grains the emitters got in during it */
 
     int blaster_on;
     Blaster bl;
@@ -160,6 +266,11 @@ typedef struct {
     int glass_strength;     /* cells of load glass holds before breaking */
     int glass;              /* glass cells, running total */
     int iron;               /* iron cells, running total */
+    int wheat;              /* wheat cells, running total */
+    int bodies;             /* body cells, running total */
+    int bricks;             /* sand bricks, running total */
+    int seeds;              /* seed cells, running total */
+    uint32_t fresh_at;      /* sim frame a raindrop last started falling */
     uint8_t *keep;          /* per cell: kept through the drain */
     int *stack;             /* flood-fill scratch, w*h ints */
     int kept_grains;        /* kept dirt/moss, counted in grains too */
@@ -173,6 +284,40 @@ typedef struct {
     int tree_minutes;       /* time to grow fully */
     int tree_thirst_minutes;/* time without water before it starts dying */
     float drain_overfill;
+
+    /* Steps per second of display time (fps * steps_per_frame), so
+     * timings measured in sim time can be written in seconds. */
+    int steps_per_sec;
+
+    /* Critters (critter.c). */
+    int critters_on;        /* update and spawn them at all */
+    int critter_max;        /* most alive at once, up to MAX_CRITTERS */
+    int starve_minutes;     /* sim minutes from full to starving */
+    int wheat_per_pour;     /* stock levels one pour adds */
+    Critter crit[MAX_CRITTERS];
+    Home home[MAX_HOMES];
+    int farms;              /* homes with wheat: like trees, they hold the fill */
+    int held;               /* the fill is being held: critters toss sand */
+    long tossed;            /* grains critters have tossed off the screen */
+    int toss_window;        /* of those, in the current stall window */
+    Toss toss[MAX_CRITTERS];/* the last toss each made, for the renderer */
+    FarList far[FAR_LISTS];
+    /* Farming counts, for checking that only pours make wheat. */
+    long pours, pour_converted, pour_levels, bites, rotted;
+    long stocked, laid;     /* water into wells, cells built */
+    long soaks;             /* water poured on dirt */
+    long planted;           /* seeds critters planted */
+    long caught;            /* drops critters caught */
+    long guttered;          /* drops run off roofs into wells */
+    long flung;             /* grains critters flung off ledges */
+    long seeds_caught;      /* seeds critters caught */
+    long seeded;            /* seeds planted on ledges as iron */
+    long stacked;           /* cells critters stacked to climb */
+    long pressed;           /* grains critters pressed into dirt */
+    long drawn;             /* water critters drew from wells */
+    uint32_t shower_until[MAX_CRITTERS]; /* a planted seed's shower, by slot */
+    int shower_x[MAX_CRITTERS];          /* its middle column */
+    int critters;           /* slots in use */
 } Sim;
 
 int  sim_init(Sim *s, int w, int h, uint32_t seed, int n_emitters);
@@ -186,6 +331,16 @@ void sim_drop_seed(Sim *s);     /* from a random spot along the top */
 /* Lightning from the blaster to something nearby. Returns 0 if it struck,
  * -1 if there was nothing in reach (the strike is used up either way). */
 int  sim_strike(Sim *s);
+
+/* Critter kinds for sim_add_critter: CR_ANY picks one at random. */
+enum { CR_ANY = -1, CR_SMALL, CR_LARGE };
+enum { ROLE_ALL, ROLE_SAND };
+
+/* Drop a new critter from the top of the screen. Returns its slot, or -1
+ * if there's no room for it. */
+int  sim_add_critter(Sim *s, int kind);
+void update_critters(Sim *s);           /* called by sim_step */
+void reset_critters(Sim *s);            /* called by sim_reset */
 
 /* Chunks currently being simulated, for --profile. */
 int  sim_awake_chunks(const Sim *s);

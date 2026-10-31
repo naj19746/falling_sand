@@ -18,6 +18,11 @@
  * as fit in this, and at least one. */
 #define IMAGE_BYTES (2 << 20)
 
+/* A tossed scoop of sand flies off the screen over TOSS_STEPS sim steps,
+ * rising TOSS_HEIGHT cells. */
+#define TOSS_STEPS  30
+#define TOSS_HEIGHT 10
+
 #define BOLT_FRAMES 6
 #define BOLT_SOLID  2
 #define BOLT_FORKS  3
@@ -189,6 +194,58 @@ static void build_glass(uint32_t *glass, uint32_t *shard, const uint32_t *sand)
     }
 }
 
+/* Wheat by how much food is left in it: pale green when eaten down,
+ * deep gold when full. The rest of the color byte is texture. */
+static void build_wheat(uint32_t *pal)
+{
+    static const int lo[3] = {130, 170, 80}, hi[3] = {214, 166, 44};
+    for (int i = 0; i < 256; i++) {
+        int k = i & WHEAT_MAX, j = ((i >> 3) * 11 % 17) - 8;
+        uint32_t rgb = 0;
+        for (int ch = 0; ch < 3; ch++)
+            rgb = rgb << 8 | (uint32_t)(lo[ch] + (hi[ch] - lo[ch]) * k / WHEAT_MAX + j);
+        pal[i] = 0xFF000000u | rgb;
+    }
+}
+
+/* Critter parts: a pale head over a violet body, which stands out from
+ * every sand palette and the dirt and moss. Each slot is tinted a little
+ * differently so neighbors can be told apart. */
+static void build_critter(uint32_t *pal)
+{
+    static const int part[6][3] = {
+        {242, 238, 224},    /* head */
+        { 24,  20,  28},    /* eye */
+        {150, 104, 190},    /* body */
+        { 92,  62, 120},    /* leg */
+        {118,  84, 150},    /* leg, other step */
+        {200, 232, 255},    /* spark */
+    };
+    for (int i = 0; i < 256; i++) {
+        int p = i >> 5, j = (i & 31) * 7 % 15 - 7;
+        if (p > PART_SPARK)
+            p = PART_BODY;
+        int jj = p == PART_EYE || p == PART_SPARK ? 0 : j;
+        pal[i] = 0xFF000000u | (uint32_t)((part[p][0] + jj) << 16 |
+                                          (part[p][1] + jj / 2) << 8 | part[p][2]);
+    }
+}
+
+/* Stone and iron a critter placed: a little warmer and with a darker
+ * line along the bottom of every other cell's texture, so walls read as
+ * laid bricks. */
+static void build_built(uint32_t *pal)
+{
+    for (int i = BUILT; i < 256; i++) {
+        uint32_t c = pal[i & ~BUILT];
+        int r = (int)(c >> 16 & 0xFF), g = (int)(c >> 8 & 0xFF), b = (int)(c & 0xFF);
+        int d = i & 1 ? 0 : 12;
+        r = r + 14 - d; g = g + 4 - d; b = b - 8 - d;
+        pal[i] = 0xFF000000u | (uint32_t)((r < 0 ? 0 : r > 255 ? 255 : r) << 16 |
+                                          (g < 0 ? 0 : g) << 8 | (b < 0 ? 0 : b));
+    }
+}
+
 /* Everything but the X side: image size in chunks, chunk maps and color
  * tables. Needs w, h, scale, cw, ch, pw and ph set. */
 static int render_setup(Render *r, const PaletteDef *pd)
@@ -211,9 +268,11 @@ static int render_setup(Render *r, const PaletteDef *pd)
     r->dirty = calloc((size_t)r->cw * r->ch, 1);
     if (!r->dirty)
         return -1;
+    for (int i = 0; i < MAX_CRITTERS; i++)
+        r->carry_at[i][0] = r->carry_at[i][1] = r->toss_at[i][0] = r->toss_at[i][1] = -1;
 
     uint32_t autumn[256];
-    for (int t = 0; t < 16; t++)
+    for (int t = 0; t < 32; t++)
         for (int i = 0; i < 256; i++)
             r->lut[t][i] = BG_COLOR;
     build_palette(r->lut[SAND], pd);
@@ -234,6 +293,11 @@ static int render_setup(Render *r, const PaletteDef *pd)
     build_glass(r->lut[GLASS], r->lut[SHARD], r->lut[SAND]);
     for (int i = 0; i < 256; i++)
         r->lut[SEED][i] = SEED_COLOR;
+    build_earth(r->lut[BODY], 112, 112, 116);
+    build_wheat(r->lut[WHEAT]);
+    build_critter(r->lut[CRITTER]);
+    build_built(r->lut[STONE]);
+    build_built(r->lut[IRON]);
     return 0;
 }
 
@@ -318,7 +382,7 @@ void render_invalidate(Render *r)
 
 static inline uint32_t cell_color(const Render *r, uint16_t c)
 {
-    return r->lut[CELL_TYPE(c) & 15][CELL_COLOR(c)];
+    return r->lut[CELL_TYPE(c) & 31][CELL_COLOR(c)];
 }
 
 /* 50/50 blend toward the ring color. */
@@ -479,6 +543,73 @@ static void draw_bolt(Render *r, const Sim *s, int frame)
         }
 }
 
+/* Where critter i's carried cell shows: just over its head, on the side
+ * it faces. Returns 0 if it isn't carrying anything. */
+static int carry_spot(const Render *r, const Sim *s, int i, int *x, int *y)
+{
+    const Critter *c = &s->crit[i];
+    if (c->state == CR_FREE || c->state == CR_AWAY || !c->carry)
+        return 0;
+    *x = c->x + (c->w > 1 && c->face > 0);
+    *y = c->y - c->h;
+    return *x >= 0 && *x < r->w && *y >= 0 && *y < r->h;
+}
+
+/* Where critter i's last toss is in its flight: an arc up and off the
+ * side of the screen over TOSS_STEPS sim steps. Returns 0 once it's gone
+ * (or off the screen). */
+static int toss_spot(const Render *r, const Sim *s, int i, int *x, int *y)
+{
+    const Toss *t = &s->toss[i];
+    uint32_t age = s->frame - t->frame;
+    if (!t->frame || age >= TOSS_STEPS)
+        return 0;
+    int reach = (t->dir < 0 ? t->x : r->w - t->x) + 2;
+    int k = (int)age, n = TOSS_STEPS;
+    *x = t->x + t->dir * reach * k / n;
+    *y = t->y - TOSS_HEIGHT * 4 * k * (n - k) / (n * n);
+    return *x >= 0 && *x < r->w && *y >= 0 && *y < r->h;
+}
+
+static void draw_carried(Render *r, const Sim *s)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        int x, y;
+        if (carry_spot(r, s, i, &x, &y))
+            put_cell(r, x, y, cell_color(r, s->crit[i].carry));
+        if (toss_spot(r, s, i, &x, &y))
+            put_cell(r, x, y, cell_color(r, s->toss[i].cell));
+    }
+}
+
+/* Redraw the chunk an overlay cell left and the one it's in now, only
+ * when it moves. */
+static void mark_moved(Render *r, int x, int y, int prev[2])
+{
+    if (x == prev[0] && y == prev[1])
+        return;
+    if (prev[0] >= 0)
+        r->dirty[(prev[1] >> CHUNK_SHIFT) * r->cw + (prev[0] >> CHUNK_SHIFT)] = 1;
+    if (x >= 0)
+        r->dirty[(y >> CHUNK_SHIFT) * r->cw + (x >> CHUNK_SHIFT)] = 1;
+    prev[0] = x;
+    prev[1] = y;
+}
+
+/* Carried and tossed cells move with their critters. */
+static void mark_carried(Render *r, const Sim *s)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        int x, y;
+        if (!carry_spot(r, s, i, &x, &y))
+            x = y = -1;
+        mark_moved(r, x, y, r->carry_at[i]);
+        if (!toss_spot(r, s, i, &x, &y))
+            x = y = -1;
+        mark_moved(r, x, y, r->toss_at[i]);
+    }
+}
+
 /* Draw the overlays over the chunks in the image and send them. */
 static void flush(Render *r, const Sim *s, int show_ring, int show_bolt, int bolt_frame)
 {
@@ -486,6 +617,7 @@ static void flush(Render *r, const Sim *s, int show_ring, int show_bolt, int bol
         return;
     if (show_ring)
         draw_ring(r, s, &s->bl);
+    draw_carried(r, s);
     if (show_bolt)
         draw_bolt(r, s, bolt_frame);
 
@@ -534,6 +666,7 @@ void render_draw(Render *r, Sim *s)
     overlay_box(r, show_bolt, bb[0], bb[1], bb[2], bb[3], r->bolt_box, &r->have_bolt);
 
     int bolt_frame = show_bolt ? BOLT_FRAMES + 1 - r->bolt_frames-- : 0;
+    mark_carried(r, s);
 
     /* Pack each horizontal run of dirty chunks into the image, wrapping
      * to the next row of it when one doesn't fit; once it's full, send

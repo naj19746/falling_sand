@@ -23,7 +23,7 @@ typedef struct {
     int             use_shm;
 
     /* Pixel color for each cell, by type then color byte. */
-    uint32_t        lut[16][256];
+    uint32_t        lut[32][256];
     int             w, h;           /* grid size */
     int             pw, ph;         /* window size in pixels */
     int             scale;
@@ -39,6 +39,8 @@ typedef struct {
     int             bolt_frames;    /* frames left to show it */
     int             bolt_box[4];    /* chunk box it covered last frame */
     int             have_bolt;
+    int             carry_at[MAX_CRITTERS][2];  /* cell a carried cell was drawn at, or -1 */
+    int             toss_at[MAX_CRITTERS][2];   /* likewise a tossed one in flight */
 
     /* --profile counters, reset by the caller */
     long            chunks_drawn;

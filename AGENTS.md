@@ -26,11 +26,15 @@ lock file stops a second desktop copy, but `--windowed` runs alongside it.
 main.c      startup, flags (usage()), config load, main loop, input, pause when covered
 sim.c/.h    the cellular automaton: all cell types, emitters, blaster, drain cycle,
             seeds, lightning, glass, trees, sleeping chunks
+sim_internal.h  helpers shared by sim.c and critter.c (set_cell, rnd, move, ...)
+critter.c   critters: bodies on the grid, food, wheat, homes and wells (see CRITTERS.md)
 render.c/.h draws changed chunks into the X window through MIT-SHM
 x11.c/.h    desktop window properties, the "is the desktop covered" check
 audio.c/.h  PulseAudio loudness of the output (background thread)
 weather.c/.h  Open-Meteo via curl → drops per minute (background thread)
 spotify.c/.h  Spotify over D-Bus MPRIS → count of songs finished (background thread)
+progress.c/.h  finished kana sets (curl) and new Pixelorama drawings → critters
+            waiting to drop in, kept in ~/.local/state/sandbg/progress (background thread)
 config.c/.h ini parsing, defaults, validation
 keyboard.c/.h  Keychron Q4 per-key LEDs: screen -> keys, raw HID protocol
 firmware/keychron-q4-sandbg/  the QMK keymap the keyboard needs for per-key control
@@ -57,6 +61,33 @@ sandbg-setup  install/undo script; git-hook  the global hook dispatcher it insta
 - The scan is bottom-up and alternates direction each step. Per-cell stamps
   stop a cell moving twice in one step.
 
+## Invariants in critter.c
+
+- A live critter's body is exactly its `w`x`h` rectangle of `CRITTER`
+  cells, whose color byte holds its slot, and no other cell is
+  `CRITTER`. Nothing else may write over a critter cell: `sim_paint()`,
+  `clear_unkept()` and the strike skip them, and every critter move goes
+  through `relocate()`. A critter that's away (`CR_AWAY`, off screen
+  during a drain) has no cells.
+- A carried cell is out of the grid (the totals already dropped) until
+  it's put down with `set_cell()`.
+- Wheat's `since[]` is in sim seconds (`frame / steps_per_sec`), not the
+  wall clock: it rots on sim time. `set_cell()` handles that.
+- Only a pour in critter.c makes or grows wheat; nothing in sim.c's water
+  code knows about it. The one water hook into critter.c is `gutter()`:
+  rain landing on a built home roof moves into that home's well.
+- Iron a critter makes from a seed is `BUILT | SEEDED` iron outside any
+  home's plan: nobody mines it, and `rust_iron()` skips `SEEDED` cells.
+  Stairs critters build up to their patch are `BUILT` stone outside any
+  plan too. Steps pressed from sand also carry `SAND_BRICK` and turn back
+  into sand `SAND_BRICK_SECS` (sim time) after they're laid; `set_cell()`
+  keeps the `bricks` total that wakes `age_damp()` for them. Everything
+  else built lasts until the drain, unless it's joined to iron: built
+  stone joined to iron is kept like earth (`mark_kept()`). Iron outside a seed's patch never has
+  the `SEEDED` bit, and stone laid in a home never has `SAND_BRICK`.
+- Every critter timing goes through `csecs()` (supercharge) except
+  falling.
+
 ## Adding a config setting
 
 Change all of these together:
@@ -76,11 +107,19 @@ steps, and checks that:
 - the grid settles: no falling grain is left with room to fall, and every
   chunk eventually sleeps
 - several fill/drain cycles in a row complete
+- with critters: every `CRITTER` cell belongs to a live critter's
+  rectangle and every rectangle is whole, and `s->wheat` never rises by
+  more than the pours converted that step (CRITTERS.md, Testing)
 
 Then look at it with `make run`. For the external inputs, use
 `--set rain_override=<drops/min>` for rain, the `s` and `l` keys for seeds
 and lightning, and `--meter`, `--weather` and `--spotify` to check what
-sandbg sees.
+sandbg sees. For critters, the `c` key drops one, and `--progress` shows the
+kana counters and drawings that earn them. Test rewards with a temporary
+`XDG_STATE_HOME`, a fake kana server for `kana_url`, a temporary
+`pixelorama_config`, and `SANDBG_PROGRESS_POLL_MS` to poll faster. Don't
+run `--critter` while the desktop copy is up unless you mean to: it signals
+every process named sandbg.
 
 For the keyboard, `--keyboard-preview` draws the computed LED colors in the
 terminal (it needs no hardware), and `--keyboard` checks whether the

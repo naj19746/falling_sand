@@ -93,3 +93,23 @@ keyboard_brightness = 1.0
 ; Drive this hidraw device instead of finding the keyboard (e.g. /dev/hidraw1).
 ; Empty = look for a Keychron raw HID interface.
 keyboard_device =
+
+; Critters: tiny creatures that farm moss into wheat, carry water to a
+; well and build huts from stone and iron (see CRITTERS.md). They're earned:
+; finishing a kana practice set (5 min: 1 half the time, 10 min: 1,
+; 15 min: 2) or saving a new Pixelorama drawing drops one in. The c key
+; and `sandbg --critter` drop one by hand. Check what sandbg sees with:
+; sandbg --progress
+critters = true
+; Most critters alive at once (1-32). More wait until there's room.
+critter_max = 24
+; Minutes of visible sim time from a full stomach to starving (5-600).
+critter_starve_minutes = 40
+; Wheat stock levels one pour of water adds (1-7); each bite eats one
+; level, a third of a meal. Lower makes food scarcer.
+wheat_per_pour = 3
+; The kana practice platform, read every 30 seconds. Empty = no kana rewards.
+kana_url = http://127.0.0.1:8080
+; Pixelorama's settings file, checked every 5 seconds for newly saved
+; drawings. Empty = no drawing rewards.
+pixelorama_config = ~/.local/share/pixelorama/config.ini
