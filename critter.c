@@ -125,7 +125,7 @@
  * (or the open cell above) to dirt, which the iron holds through the
  * drain too, and a shower of SHOWER_RATE drops a minute falls over
  * SHOWER_W columns around it for SHOWER_SECS to grow moss on it. */
-#define SEED_IRON   9
+#define SEED_IRON   20
 #define SHOWER_RATE 30.0f
 #define SHOWER_W    21
 #define SHOWER_SECS 120.0f
@@ -144,8 +144,9 @@
 #define IDLE_PRESS  0.7f
 
 /* A new critter drops in within JOIN_SPREAD columns of a critter's patch
- * if there's one, and lives there. The colony's second critter only
- * moves sand (ROLE_SAND): clearing the patch and the home's plan. */
+ * if there's one, lives there, and plants its seed at the end of it to
+ * widen it. After that, the colony's second critter only moves sand
+ * (ROLE_SAND): clearing the patch and the home's plan. */
 #define JOIN_SPREAD 4
 #define PRESS_SECS  30.0f
 #define STAIR_RISE  JUMP
@@ -1853,6 +1854,35 @@ static void clear_ledge(Sim *s, int i)
     end_goal(s, c);
 }
 
+/* Where to plant a seed to widen critter c's patch: the first stone along
+ * the ledge past either end of its iron, the nearer one. */
+static int patch_end_spot(const Sim *s, const Critter *c, int *fx, int *fy)
+{
+    int best = -1;
+    for (int d = -1; d <= 1; d += 2) {
+        int x = c->patch_x, y = c->patch_y;
+        for (int n = 0; n < 4 * SEED_IRON; n++) {
+            int nx = x + d, ny = -1;
+            for (int yy = y - 1; yy <= y + 1 && ny < 0 && nx >= 0 && nx < s->w; yy++)
+                if (yy > 0 && yy < s->h && ledge_cell(at(s, nx, yy)) && !ledge_cell(at(s, nx, yy - 1)))
+                    ny = yy;
+            if (ny < 0)
+                break;
+            x = nx;
+            y = ny;
+            if (CELL_TYPE(at(s, x, y)) == STONE) {
+                if (best < 0 || abs(x - c->x) < abs(*fx - c->x)) {
+                    *fx = x;
+                    *fy = y;
+                    best = 1;
+                }
+                break;
+            }
+        }
+    }
+    return best > 0;
+}
+
 /* Where to plant a seed: the bare top of a stone ledge, or sand on one. */
 static int rank_seed_spot(const Sim *s, int x, int y)
 {
@@ -1911,10 +1941,13 @@ static void plant_seed(Sim *s, int i)
     s->seeded++;
     s->shower_until[i] = s->frame + (uint32_t)secs(s, SHOWER_SECS);
     s->shower_x[i] = c->tx;
-    c->has_patch = 1;
-    c->patch_x = c->tx;
-    c->patch_y = top;
-    c->ax = c->tx;
+    /* Widening the patch it lives on, it keeps that one. */
+    if (!patch_ok(s, c)) {
+        c->has_patch = 1;
+        c->patch_x = c->tx;
+        c->patch_y = top;
+        c->ax = c->tx;
+    }
     end_goal(s, c);
 }
 
@@ -2213,7 +2246,9 @@ static void think(Sim *s, int i)
     }
     /* A seed to plant: on the nearest ledge. Without one in sight or
      * anywhere on the screen, it keeps the seed for later. */
-    if (c->seed && c->role != ROLE_SAND && (find_best(s, i, rank_seed_spot, &fx, &fy) ||
+    /* Living on a patch, it widens that; else the nearest ledge. */
+    if (c->seed && ((patch_ok(s, c) && patch_end_spot(s, c, &fx, &fy)) ||
+                    find_best(s, i, rank_seed_spot, &fx, &fy) ||
                     find_far(s, i, rank_seed_spot, &fx, &fy))) {
         set_goal(s, c, G_PLANT, fx, fy);
         return;
@@ -2948,10 +2983,8 @@ int sim_add_critter(Sim *s, int kind)
         c->patch_y = l->patch_y;
         c->ax = l->patch_x;
         c->home = l->home;
-        if (!colony_has(s, l, ROLE_SAND)) {
+        if (!colony_has(s, l, ROLE_SAND))
             c->role = ROLE_SAND;
-            c->seed = 0;
-        }
     }
     c->next_think = s->frame + (uint32_t)slot;
     s->critters++;

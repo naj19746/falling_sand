@@ -698,6 +698,37 @@ food. More food per patch would be the lever: a bigger patch per seed,
 newcomers planting their seed next to the colony's patch to widen it
 (right now the sand-mover's seed is dropped), or more wheat per pour.
 
+### Follow-up: bigger patches, newcomers widen them
+
+Asked for: a bigger patch per seed, and newcomers planting next to the
+colony's patch.
+
+- A seed now turns up to 20 cells of ledge into iron (`SEED_IRON`, was 9).
+- A critter living on a patch, the sand-mover included, plants its seed
+  at the first stone past either end of the patch's iron, whichever is
+  nearer, so each newcomer widens the colony's patch. It keeps living on
+  the patch it joined. Its shower greens the new stretch.
+
+**Matrix (typical day, 8 seeds x 3 days):** the biggest step since
+patches.
+
+| Setup | Arrivals | Runs alive at end | Mean life | Bites per arrival | Fill held | Homes finished |
+|---|---|---|---|---|---|---|
+| 2 a day | 6 | 2/8 | 2.4 h (1.2-3.5), was 1.7 | 1.7, was 0.7 | 4.5 h, was 1.6 | 1 run |
+| 2 kept alive | 20 (was 31) | 8/8 | 2.9 h (1.6-6.3), was 1.7 | 2.7, was 1.1 | 13.7 h, was 9.8 | 2 runs |
+| 3 kept alive | 28 (was 40) | 8/8 | 2.4 h (1.3-3.1), was 1.9 | 2.3, was 1.9 | 14.3 h, was 12.6 | 5 runs |
+| starve240 | 6 | 8/8 | 5.0 h (1.2-8.2), was 6.0 | 1.1 | 11.5 h | 4 runs |
+
+Fewer arrivals in the kept-alive runs means fewer deaths to replace.
+Moss on the screen at evening reaches 37-116 cells (was 0-63), and wheat
+up to 35. Homes now get finished in some runs. Still, no well held water
+at evening.
+
+Colony trace (2 or 3 kept alive, 4 seeds): critters share a patch 44-94%
+of the time. Sand-movers are on their patch 28-73% of the time. A patch
+has 6-18 cells of moss or wheat around it, 1-3 of them uncovered. Most
+deaths are still starvation (21 of 21).
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
