@@ -147,8 +147,9 @@ more sand. They live off the land:
   there, and plant their seed at its end to widen it; a colony's second
   critter then only moves sand. Dirt and fallen debris are its bricks, and large critters
   mine iron; nobody digs into a ledge's stone. They build a small well on
-  their patch's iron. Built on iron, it comes
-  through the drain with its water. New critters drop in over stone or
+  their patch's iron, before most other jobs. Built on iron, it comes
+  through the drain with its water. A well is a cistern: water resting
+  on its roof seeps in, and loose water nearby slowly drifts toward it. New critters drop in over stone or
   iron when there is some. Each critter arrives with a seed, and sprints to
   catch any that falls near it. It plants a seed on a stone ledge,
   turning a short stretch of it to iron that never rusts, with dirt on

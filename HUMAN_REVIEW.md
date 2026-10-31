@@ -729,6 +729,58 @@ of the time. Sand-movers are on their patch 28-73% of the time. A patch
 has 6-18 cells of moss or wheat around it, 1-3 of them uncovered. Most
 deaths are still starvation (21 of 21).
 
+### Follow-up: wells as cisterns, finished first
+
+Asked about: do critters clear sand out of their wells? Then: wells as
+cisterns that take water through more than the mouth, a slight pull on
+water within 5-7 pixels, finishing a well as a top priority, and wells
+5 wide.
+
+**Sand in the wells.** They do clear it, through the mouth, but that job
+ranked after flinging sand off the patch, and the patch almost always
+has sand on it. Traced over 4 realistic days, well interiors were 63-76%
+grains, about a quarter empty, and never held water. Wells were finished
+only 0-6% of the time, so sand poured in every fill. Clearing the home
+now comes before clearing the patch.
+
+**Evaporation:** water in a well never evaporates, and well water on an
+iron floor is kept through the drain. The problem was getting water in:
+a 3-wide well caught about one stray drop an hour.
+
+**Changes:**
+- **Cistern:** water resting on a built roof cell seeps through into the
+  lowest open cell inside. Fresh rain on the roof still goes in through
+  the gutter.
+- **Pull:** loose water within 6 cells of a well drifts toward its roof,
+  a cell at a time (2 random cells looked at each step), and then seeps
+  in.
+- **Priority:** right after clearing the home (and after eating,
+  planting and getting back to the patch), a critter finishes its well,
+  with material in sight or a brick it presses from sand in reach. Large
+  critters don't go off across the screen for iron for this. The
+  sand-mover doesn't build.
+- **Width:** patch wells are 5 wide (3 inside).
+- t19 passes with the new well: finished in 31 minutes, 4 rows deep,
+  with 11 cells of water kept through a drain.
+- t12 now checks that 7 drops on a roof reach the well, rather than that
+  all 7 were guttered: some seep in through the roof instead.
+
+**Matrix (typical day, 8 seeds x 3 days):**
+
+| Setup | Clearing the home first (step 1) | Plus cisterns, priority, 5 wide (step 2) |
+|---|---|---|
+| 2 a day | 5/8 runs alive, 2.1 h, 1 run with a finished home | 5/8 runs alive, 2.0 h, 3 runs |
+| 2 kept alive | 2.7 h, 1 run | 2.8 h, 6 runs |
+| 3 kept alive | 2.6 h, 4 runs | 3.0 h, 4 runs |
+| starve240 | 5.8 h, 2 runs | 7.2 h, 2 runs |
+
+Before both steps: 2/8 runs alive, 2.4 h; 2.9 h; 2.4 h; 5.0 h.
+
+Home cells laid went from about 11 a run to 17-29, and more runs finish
+a home. Yet wells still hold almost no water at the end of a day
+(0-1 cells). I haven't traced whether no water gets in, or whether
+critters draw it out again to pour on the field.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

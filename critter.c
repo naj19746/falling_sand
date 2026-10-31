@@ -80,7 +80,7 @@
 #define HOME_RADIUS   12
 #define WELL_ROWS     2
 #define WELL_MAX_ROWS 5
-#define PATCH_WELL_W  3
+#define PATCH_WELL_W  5
 #define HOME_LEVEL    8
 #define HUT_W         5
 #define HUT_GAP       3
@@ -862,6 +862,62 @@ int gutter(Sim *s, int x, int y)
         return 0;
     }
     return 0;
+}
+
+/* Wells act as cisterns: water resting on a well's roof seeps through
+ * into it, and loose water within WELL_PULL cells drifts toward it, a cell
+ * at a time, PULL_TRIES random cells looked at each step. */
+#define WELL_PULL  6
+#define PULL_TRIES 2
+
+/* The lowest open cell inside well h, or 0 if it's full. */
+static int well_room(const Sim *s, const Home *h, int *rx, int *ry)
+{
+    for (int wy = h->wy1; wy >= h->wy0; wy--)
+        for (int wx = h->wx0; wx <= h->wx1; wx++)
+            if (CELL_TYPE(at(s, wx, wy)) == EMPTY) {
+                *rx = wx;
+                *ry = wy;
+                return 1;
+            }
+    return 0;
+}
+
+static void cisterns(Sim *s)
+{
+    for (int k = 0; k < MAX_HOMES; k++) {
+        const Home *h = &s->home[k];
+        int rx, ry, top = well_top(h), wx = well_x(h);
+        if (!h->used || top < 1 || !well_room(s, h, &rx, &ry))
+            continue;
+        /* Through the roof. */
+        for (int x = wx; x < wx + h->ww; x++) {
+            uint16_t v = at(s, x, top - 1);
+            if (CELL_TYPE(v) == WATER && built(at(s, x, top))) {
+                set_cell(s, x, top - 1, CELL(EMPTY, 0));
+                set_cell(s, rx, ry, CELL(WATER, CELL_COLOR(v) & 0x3F));
+                if (!well_room(s, h, &rx, &ry))
+                    break;
+            }
+        }
+        /* Drawn toward the roof from nearby. */
+        int mx = wx + h->ww / 2, my = top - 1;
+        for (int n = 0; n < PULL_TRIES; n++) {
+            int x = wx - WELL_PULL + (int)(rnd(s) % (uint32_t)(h->ww + 2 * WELL_PULL));
+            int y = top - WELL_PULL + (int)(rnd(s) % (uint32_t)(h->y - top + WELL_PULL + 1));
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h || in_well(s, x, y) ||
+                CELL_TYPE(at(s, x, y)) != WATER)
+                continue;
+            int dx = mx - x, dy = my - y;
+            int nx = x + (abs(dx) >= abs(dy) ? (dx > 0) - (dx < 0) : 0);
+            int ny = y + (abs(dx) >= abs(dy) ? 0 : (dy > 0) - (dy < 0));
+            if (CELL_TYPE(at(s, nx, ny)) == EMPTY) {
+                uint16_t v = at(s, x, y);
+                set_cell(s, x, y, CELL(EMPTY, 0));
+                set_cell(s, nx, ny, v);
+            }
+        }
+    }
 }
 
 /* Every plan cell of the well (or the hut) is built. */
@@ -2274,8 +2330,28 @@ static void think(Sim *s, int i)
         return;
     if (c->carry)
         goto stroll;                /* hands full: nothing else for now */
+    /* The home first: sand in the well, on its roof, against its walls,
+     * on the field around it. */
+    if (h && (next_clear(s, h, &fx, &fy) || roof_junk(s, h, &fx, &fy) ||
+              wall_bank(s, h, &fx, &fy) || field_junk(s, h, &fx, &fy)) &&
+        !avoided(s, c, fx, fy)) {
+        set_goal(s, c, G_CLEAR, fx, fy);
+        return;
+    }
+    /* Then finishing the well: with material in sight, or else a brick
+     * pressed from sand in reach. (The sand-mover leaves it to others.) */
+    int bx, by, need = c->role != ROLE_SAND && h && at_home_level(c, h) &&
+                       next_build(s, h, &bx, &by);
+    if (need && find_best(s, i, rank_stone, &fx, &fy)) {
+        set_goal(s, c, G_BUILD, fx, fy);
+        return;
+    }
+    if (need && press_spot(s, i, &fx, &fy)) {
+        set_goal(s, c, G_PRESS, fx, fy);
+        return;
+    }
     if (patch_ok(s, c)) {
-        /* There: sand piled on it goes over the edge. */
+        /* Then sand piled on the patch goes over the edge. */
         if (abs(c->x - c->patch_x) <= PATCH_RANGE && find_best(s, i, rank_ledge, &fx, &fy) &&
             abs(fx - c->patch_x) <= SEED_IRON) {
             set_goal(s, c, G_LEDGE, fx, fy);
@@ -2283,13 +2359,6 @@ static void think(Sim *s, int i)
         }
     } else {
         c->has_patch = 0;
-    }
-
-    if (h && (next_clear(s, h, &fx, &fy) || roof_junk(s, h, &fx, &fy) ||
-              wall_bank(s, h, &fx, &fy) || field_junk(s, h, &fx, &fy)) &&
-        !avoided(s, c, fx, fy)) {
-        set_goal(s, c, G_CLEAR, fx, fy);
-        return;
     }
     if (c->role == ROLE_SAND)
         goto stroll;                /* sand is all it does */
@@ -2328,7 +2397,7 @@ static void think(Sim *s, int i)
      * critter and there's any to be had, or stone. With everything built,
      * large critters go on fetching iron to swap for the stone in it,
      * which also mends rust. */
-    int need = h && at_home_level(c, h) && next_build(s, h, &px, &py);
+    need = h && at_home_level(c, h) && next_build(s, h, &px, &py);
     int swap = h && !need && stone_to_swap(s, c, h, &px, &py);
     if ((need || swap) && find_iron(s, i, &fx, &fy)) {
         set_goal(s, c, G_BUILD, fx, fy);
@@ -2855,6 +2924,7 @@ void update_critters(Sim *s)
     if (s->frame % (uint32_t)secs(s, FARM_COUNT_SECS) == 0)
         count_farms(s);
     showers(s);
+    cisterns(s);
     for (int i = 0; i < MAX_CRITTERS; i++)
         if (s->crit[i].state != CR_FREE && s->crit[i].state != CR_AWAY)
             critter_tick(s, i);
