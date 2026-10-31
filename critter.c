@@ -2408,13 +2408,15 @@ static void think(Sim *s, int i)
         return;
     }
 
-    /* Keep the field stocked: puddles first, then the well. */
-    int px, py, puddle = find_best(s, i, rank_water, &fx, &fy);
+    /* Keep the field stocked: puddles first (up at the home's level, if
+     * it has one), then the well, whenever it has water, built or not. */
+    int px, py, puddle = find_best(s, i, rank_water, &fx, &fy) &&
+                         (!h || abs(fy - h->y) <= HOME_LEVEL);
     int well_done = h && part_done(s, h, 1);
     c->thirsty = (uint8_t)((field_short(s, c) && find_pour(s, i, &px, &py)) ||
                            (well_done && (well_water(s, h, &room), room > 0)));
     if (field_short(s, c) && find_pour(s, i, &px, &py)) {
-        if (!puddle && well_done && well_water(s, h, &room) > 0) {
+        if (!puddle && h && at_home_level(c, h) && well_water(s, h, &room) > 0) {
             mouth(h, &fx, &fy);
             puddle = 1;
         }

@@ -851,6 +851,30 @@ the previous commit, only with a different random stream, and the
 typical day moved from 2.8 h to 2.5 h by that alone. With so few draws,
 a spring can't change much. It's harmless and easy to tune or set to 0.
 
+### Follow-up: the well as the field's backup water
+
+Asked for: the well as a definite backup for the field when there's no
+other water.
+
+- When the field needs water and there's no puddle near the home's level
+  (puddles farther up or down no longer count when it has a home), a
+  critter at home draws from its well whenever it has any water, built
+  or not. Before, the well was used only once finished, and any puddle
+  within 40 cells, even far below the ledge, came first.
+
+| Same 8 seeds x 3 days | Draws per run | Pours per run | Bites per arrival | Mean life |
+|---|---|---|---|---|
+| typical, `WELL_KEEP` 0 | 6.9 | 12.0 | 2.8 | 2.6 h |
+| typical, `WELL_KEEP` 0.6 | 6.4 | 8.0 | 1.3 | 2.3 h |
+| 2 kept alive, 0 | 13.2 | 34.4 | 2.6 | 2.5 h |
+| 2 kept alive, 0.6 | 25.4 | 57.6 | 4.5 | 2.7 h |
+
+With 2 critters kept alive the spring roughly doubles draws and pours,
+and bites per arrival go up 70%. In the typical day it's the reverse,
+which says the typical rows are mostly noise: only a few draws happen.
+Draws stay rare because wells rarely have any water in them. Rain only
+gets in through the mouth and roof, a few cells across.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
