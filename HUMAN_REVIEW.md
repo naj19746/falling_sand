@@ -656,6 +656,48 @@ next lever.
 
 All step tests pass.
 
+### Follow-up: colonies and a sand-mover
+
+Asked for: new critters spawn near the others and stay nearby, and the
+second critter specializes in moving sand.
+
+- A new critter drops in within 4 columns of an existing critter's
+  patch, if there is one, and adopts that patch and its home.
+- The colony's second critter is a sand-mover (`ROLE_SAND`). Besides
+  eating and getting back to the patch, it only clears sand off the
+  patch and out of the home's plan. It doesn't plant (its seed is
+  dropped), farm, build or press. A third critter does everything, like
+  the first.
+- Two critters that arrive together don't form a colony: the second
+  lands before the first has planted a patch to join. Later arrivals
+  (and replacements in the `KEEP` runs) do join.
+
+**Matrix (typical day, 8 seeds x 3 days):**
+
+| Setup | Arrivals | Runs alive at end | Mean life | Bites per arrival | Fill held | Sand flung per run |
+|---|---|---|---|---|---|---|
+| 2 a day | 6 | 2/8 | 1.7 h | 0.7 | 1.6 h | 4,800 |
+| 3 a day | 9 | 1/8 | 1.7 h | 0.8 | 2.0 h | 5,400 |
+| 2 kept alive | 31 | 8/8 | 1.7 h | 1.1 | 9.8 h | 19,100 |
+| 3 kept alive | 40 | 8/8 | 1.9 h | 1.9 | 12.6 h | 29,900 |
+
+That's about the same as without colonies (previous section). Mean life
+stays at about 1.7-1.9 hours.
+
+**Why** (traced, 2 or 3 kept alive, 4 seeds):
+- Colonies form: a critter shares its patch 53-82% of the time.
+- Sand-movers are on their patch 32-55% of the time. They spend 31-48%
+  getting back to it and 5-24% flinging sand off it.
+- **Food is the cap.** A patch has 1.5-5.8 cells of moss or wheat around
+  it, and only 0.4-1.4 of them uncovered at a time. A critter needs about
+  3 bites per 40-minute stomach, and the whole colony gets 6-20 bites in
+  an 8-hour day. Nearly every death is starvation (37 of 41).
+
+Sharing a patch splits the same small harvest; specializing frees no
+food. More food per patch would be the lever: a bigger patch per seed,
+newcomers planting their seed next to the colony's patch to widen it
+(right now the sand-mover's seed is dropped), or more wheat per pour.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

@@ -142,6 +142,11 @@
  * time; else it strolls), a grain every PRESS_SECS. The dirt is brick for
  * its home, and field where it's left. */
 #define IDLE_PRESS  0.7f
+
+/* A new critter drops in within JOIN_SPREAD columns of a critter's patch
+ * if there's one, and lives there. The colony's second critter only
+ * moves sand (ROLE_SAND): clearing the patch and the home's plan. */
+#define JOIN_SPREAD 4
 #define PRESS_SECS  30.0f
 #define STAIR_RISE  JUMP
 
@@ -2208,7 +2213,7 @@ static void think(Sim *s, int i)
     }
     /* A seed to plant: on the nearest ledge. Without one in sight or
      * anywhere on the screen, it keeps the seed for later. */
-    if (c->seed && (find_best(s, i, rank_seed_spot, &fx, &fy) ||
+    if (c->seed && c->role != ROLE_SAND && (find_best(s, i, rank_seed_spot, &fx, &fy) ||
                     find_far(s, i, rank_seed_spot, &fx, &fy))) {
         set_goal(s, c, G_PLANT, fx, fy);
         return;
@@ -2251,6 +2256,8 @@ static void think(Sim *s, int i)
         set_goal(s, c, G_CLEAR, fx, fy);
         return;
     }
+    if (c->role == ROLE_SAND)
+        goto stroll;                /* sand is all it does */
 
     /* Nothing growing and nothing to grow it on: plant a seed. */
     if (s->frame >= c->plant_at && !find_best(s, i, rank_earth, &fx, &fy) && plant(s, c)) {
@@ -2330,7 +2337,7 @@ stroll:
     if (c->goal != G_NONE || s->frame < c->work_until)
         return;
     /* On its patch with nothing to do: press sand into dirt, mostly. */
-    if (!c->carry && patch_ok(s, c) && c->y < c->patch_y &&
+    if (!c->carry && c->role != ROLE_SAND && patch_ok(s, c) && c->y < c->patch_y &&
         abs(c->x - c->patch_x) <= PATCH_RANGE && rndf(s) < IDLE_PRESS &&
         press_spot(s, i, &fx, &fy)) {
         set_goal(s, c, G_PRESS, fx, fy);
@@ -2838,6 +2845,36 @@ static int good_column(const Sim *s, int x)
     return 0;
 }
 
+/* Critters on the same patch as l: a colony. */
+static int same_patch(const Critter *a, const Critter *b)
+{
+    return a->has_patch && b->has_patch && abs(a->patch_x - b->patch_x) <= SEED_IRON &&
+           abs(a->patch_y - b->patch_y) <= 3;
+}
+
+/* A critter (not slot skip) with a patch to join, or -1. */
+static int colony_lead(const Sim *s, int skip)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        const Critter *c = &s->crit[i];
+        if (i != skip && c->state != CR_FREE && c->goal != G_DIE && c->role == ROLE_ALL &&
+            patch_ok(s, c))
+            return i;
+    }
+    return -1;
+}
+
+/* Someone in l's colony has this role. */
+static int colony_has(const Sim *s, const Critter *l, int role)
+{
+    for (int i = 0; i < MAX_CRITTERS; i++) {
+        const Critter *c = &s->crit[i];
+        if (c->state != CR_FREE && c->goal != G_DIE && c->role == role && same_patch(c, l))
+            return 1;
+    }
+    return 0;
+}
+
 int sim_add_critter(Sim *s, int kind)
 {
     int slot = -1, alive = 0;
@@ -2858,9 +2895,21 @@ int sim_add_critter(Sim *s, int kind)
     c->h = c->kind == CR_LARGE ? 3 : 2;
     c->y = c->h - 1;
 
-    /* A clear spot along the top, best first: over stone or iron to stand
-     * and build on with earth near it, over earth, over stone or iron. */
-    int best = -1, rank = 0;
+    /* Join a colony: drop in over a critter's patch, a few columns off. */
+    int best = -1, rank = 0, lead = colony_lead(s, slot);
+    if (lead >= 0) {
+        const Critter *l = &s->crit[lead];
+        for (int tries = 0; tries < 16 && best < 0; tries++) {
+            int x = l->patch_x - JOIN_SPREAD + (int)(rnd(s) % (2 * JOIN_SPREAD + 1));
+            if (x >= 0 && x <= s->w - c->w && fits(s, slot, x, c->y))
+                best = x;
+        }
+        if (best >= 0)
+            rank = 3;
+    }
+    /* Else a clear spot along the top, best first: over stone or iron to
+     * stand and build on with earth near it, over earth, over stone or
+     * iron. */
     for (int tries = 0; tries < 64 && rank < 3; tries++) {
         int x = (int)(rnd(s) % (uint32_t)(s->w - c->w + 1));
         if (!fits(s, slot, x, c->y))
@@ -2890,6 +2939,20 @@ int sim_add_critter(Sim *s, int kind)
     c->food = 1.0f;
     c->seed = 1;
     c->home = -1;
+    if (lead >= 0 && rank == 3) {
+        /* It lives on the lead's patch, and the colony's second critter
+         * moves sand for it. */
+        const Critter *l = &s->crit[lead];
+        c->has_patch = 1;
+        c->patch_x = l->patch_x;
+        c->patch_y = l->patch_y;
+        c->ax = l->patch_x;
+        c->home = l->home;
+        if (!colony_has(s, l, ROLE_SAND)) {
+            c->role = ROLE_SAND;
+            c->seed = 0;
+        }
+    }
     c->next_think = s->frame + (uint32_t)slot;
     s->critters++;
     /* A fresh slot can't have stray cells of its own in the grid. */

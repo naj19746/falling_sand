@@ -143,7 +143,8 @@ more sand. They live off the land:
   ground allows.
 - **Building:** with nothing else to do on its patch, a critter usually
   presses sand into dirt, a grain every half minute (otherwise it
-  strolls). Dirt and fallen debris are its bricks, and large critters
+  strolls). New critters drop in by an existing critter's patch and live
+  there; a colony's second critter only moves sand. Dirt and fallen debris are its bricks, and large critters
   mine iron; nobody digs into a ledge's stone. They build a small well on
   their patch's iron. Built on iron, it comes
   through the drain with its water. New critters drop in over stone or
