@@ -836,7 +836,7 @@ streams don't pour right on top of them.
 `SAND_BRICK_SECS` 20 min,
 newcomers join a patch within `JOIN_SPREAD` 4 columns and the second in
 a colony is a sand-mover (`ROLE_SAND`), homes are a `PATCH_WELL_W` 3
-well on the patch (`PATCH_WELL_W` is 5 now), `WELL_KEEP` 0.6 of draws leave
+well on the patch (`PATCH_WELL_W` is 5 now), `WELL_KEEP` 0.8 of draws leave
 the water in the well, wells pull water within
 `WELL_PULL` 6 and soak it through their roofs, idle critters press
 sand into dirt (`IDLE_PRESS` 0.7 of the time, a grain per `PRESS_SECS` 30), critters hop up to

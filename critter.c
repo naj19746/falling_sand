@@ -874,7 +874,7 @@ int gutter(Sim *s, int x, int y)
 
 /* Water drawn from a well is left there WELL_KEEP of the time: it's fed
  * by a spring as well as the rain. */
-#define WELL_KEEP  0.6f
+#define WELL_KEEP  0.8f
 
 /* The lowest open cell inside well h, or 0 if it's full. */
 static int well_room(const Sim *s, const Home *h, int *rx, int *ry)
