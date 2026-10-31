@@ -155,7 +155,9 @@ more sand. They live off the land:
   catch any that falls near it. It plants a seed on a stone ledge,
   turning a short stretch of it to iron that never rusts, with dirt on
   top, and a short shower falls there to grow moss on it. Critters stay
-  near their patch; stranded below its floating ledge, they build brick
+  near their patch and keep back from its edges; when the screen is
+  nearly full they get onto their patch's iron, which comes through the
+  drain, and wait. Stranded below its floating ledge, they build brick
   stairs up to it out of sand, a hop apart (critters hop up to 3 cells), which crumble back into sand after about
   20 minutes. Brick pressed from dirt lasts until the drain. Otherwise
   iron comes only from

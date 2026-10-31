@@ -875,6 +875,55 @@ which says the typical rows are mostly noise: only a few draws happen.
 Draws stay rare because wells rarely have any water in them. Rain only
 gets in through the mouth and roof, a few cells across.
 
+### Follow-up: keeping critters home
+
+Asked for: keep critters closer to home, have them scurry from ledges
+they could fall from (a few attempts, and check it helps), and have them
+see a drain coming and take shelter.
+
+**Why they fell off** (traced, 4 realistic days, 2 kept alive): 20-62
+falls a day from a patch's level to below it. Most were at the drain. A
+critter on its patch is usually standing on sand piled there, not on
+kept cells, so the drain sent it walking off the screen. The rest
+walked off the end of the ledge while pressing, eating, wandering or
+detouring.
+
+**Attempts, all measured on the same 8 seeds x 3 days:**
+1. At the drain, a critter near its patch shelters on the patch instead
+   of leaving. Near home, it won't step where it would fall far and end
+   up below its patch (unless it's starving or leaving).
+2. Plus: when the screen is within 8 points of the fill that starts a
+   drain (or of the overfill that ends a held one), critters with a
+   patch go home.
+3. Plus: going home for a drain means standing over the patch's iron,
+   since the rest of the ledge crumbles.
+4. Plus a fix: attempt 1's rule stopped a critter stepping down 5 cells
+   off its well's roof onto its own ledge, and t19 stalled. A drop only
+   counts as a cliff now if it would land below the patch.
+
+| | Falls a day | At home | Typical: life, bites/arrival | 2 kept alive: life, bites/arrival |
+|---|---|---|---|---|
+| Before | 20-62 | 10-56% | 2.26 h, 1.7 | 3.29 h, 6.0 |
+| 1 | 3-11 | 13-83% | 2.76 h, 4.0 | 3.51 h, 5.8 |
+| 1+2 | 5-26 | 41-56% | 2.38 h, 2.5 | 4.39 h, 10.4 |
+| 1+2+3 | 8-12 | 24-67% | 3.20 h, 4.8 | 3.70 h, 10.2 |
+| 1+2+3+4 (committed) | | | 2.73 h, 3.0 | 3.98 h, 9.8 |
+
+**Fresh seeds (9-16) to check it isn't noise:**
+
+| | Typical: life, bites/arrival, runs alive | 2 kept alive: life, bites/arrival | starve240: runs alive, bites/arrival |
+|---|---|---|---|
+| Before | 2.19 h, 2.9, 4/8 | 3.12 h, 4.2 | 6/8, 1.0 |
+| Committed | 3.31 h, 6.1, 4/8 | 4.24 h, 9.9 | 8/8, 2.8 |
+
+Across both seed sets, mean life is up about a third in the typical day
+and the 2-kept-alive runs, and bites per arrival roughly double. In
+starve240 more critters are alive at the end. Their mean life looks
+lower (7.0 to 5.9 h), but that only averages the ones that died, so
+more survivors pull it down.
+
+All step tests pass.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

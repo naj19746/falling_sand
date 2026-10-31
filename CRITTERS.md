@@ -832,7 +832,8 @@ streams don't pour right on top of them.
 **Final values:** `wheat_per_pour` 3, `critter_starve_minutes` 40,
 `WELL_MAX_ROWS` 5, `TOSS_SHARE` 0.75 (of grains actually poured),
 `TOSS_SECS` 0.75, `LEDGE_PILE` 12, `DIG_IN_PLACE` 24, `SEED_IRON` 20, showers of `SHOWER_RATE` 30 drops/min over `SHOWER_W`
-21 columns for `SHOWER_SECS` 120, `PATCH_RANGE` 12, `STACK_SECS` 1, sand bricks crumble after
+21 columns for `SHOWER_SECS` 120, `PATCH_RANGE` 12, `CLIFF_DROP` 4, `STARVING` 0.15, `DRAIN_WARN` 0.08,
+`STACK_SECS` 1, sand bricks crumble after
 `SAND_BRICK_SECS` 20 min,
 newcomers join a patch within `JOIN_SPREAD` 4 columns and the second in
 a colony is a sand-mover (`ROLE_SAND`), homes are a `PATCH_WELL_W` 3

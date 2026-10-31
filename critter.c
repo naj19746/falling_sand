@@ -18,6 +18,16 @@
  * cells onto something it can stand on. */
 #define JUMP        3
 
+/* Near home, a critter won't step where it would drop more than
+ * CLIFF_DROP cells and end up below its patch, unless its food is below
+ * STARVING. */
+#define CLIFF_DROP  (JUMP + 1)
+#define STARVING    0.15f
+
+/* A drain coming within DRAIN_WARN of the screen's fill: critters with a
+ * patch go home to it. */
+#define DRAIN_WARN  0.08f
+
 /* Idle wandering: how far, and how long to stand between strolls. */
 #define WANDER      8
 #define IDLE_SECS   6.0f
@@ -345,6 +355,34 @@ static int built(uint16_t v)
     return (t == STONE || t == IRON) && (CELL_COLOR(v) & BUILT);
 }
 
+/* Up at its patch's level and near it, where a fall would take it off its
+ * ledge: it keeps away from edges. Not when it's starving (it may have to
+ * go down for food), leaving, or dying. */
+static int patch_ok(const Sim *s, const Critter *c);
+static int home_bound(const Sim *s, const Critter *c)
+{
+    return patch_ok(s, c) && c->y < c->patch_y &&
+           abs(c->x - c->patch_x) <= PATCH_RANGE + SEED_IRON &&
+           c->goal != G_LEAVE && c->goal != G_DIE && c->food >= STARVING;
+}
+
+/* Standing with its bottom-left at (x, y), it would drop more than
+ * CLIFF_DROP cells and land below its patch: a step there is a step off
+ * its ledge. Dropping a long way onto the ledge itself is fine. */
+static int cliff(const Sim *s, int i, int x, int y)
+{
+    const Critter *c = &s->crit[i];
+    if (x < 0 || x + c->w > s->w)
+        return 0;
+    for (int yy = y + 1; yy < s->h; yy++)
+        for (int xx = x; xx < x + c->w; xx++) {
+            int t = CELL_TYPE(at(s, xx, yy));
+            if ((t != EMPTY && t != WATER && !own(s, i, xx, yy)) || on_roof(s, xx, yy))
+                return yy - y > CLIFF_DROP && yy - 1 > c->patch_y;
+        }
+    return 1;
+}
+
 /* A hop of at least lo cells, the highest it can make up to JUMP:
  * straight up through open air, then across onto something solid. */
 static int hop(Sim *s, int i, int d, int lo)
@@ -374,6 +412,11 @@ static int step_side(Sim *s, int i, int d)
     Critter *c = &s->crit[i];
     c->face = (int8_t)d;
     c->climbing = 0;
+    /* Near home it won't step off an edge it would fall far from. */
+    if (home_bound(s, c) && cliff(s, i, c->x + d, c->y)) {
+        draw(s, i);
+        return 0;
+    }
     if (fits(s, i, c->x + d, c->y)) {
         c->step++;
         relocate(s, i, c->x + d, c->y);
@@ -2303,6 +2346,33 @@ static int use_carry(Sim *s, int i)
     return 0;
 }
 
+/* Standing above seeded iron, through whatever's piled on it: on its
+ * patch, which the drain leaves. */
+static int over_iron(const Sim *s, const Critter *c)
+{
+    for (int x = c->x; x < c->x + c->w; x++)
+        for (int y = c->y + 1; y < s->h && y <= c->y + 1 + LEDGE_PILE; y++) {
+            uint16_t v = at(s, x, y);
+            if (CELL_TYPE(v) == IRON && (CELL_COLOR(v) & SEEDED))
+                return 1;
+            if (CELL_TYPE(v) == EMPTY || CELL_TYPE(v) == STONE)
+                break;
+        }
+    return 0;
+}
+
+/* The screen is nearly full enough to drain: within DRAIN_WARN of the
+ * fill that starts it, or of the overfill that ends a held fill. */
+static int drain_soon(const Sim *s)
+{
+    float area = (float)s->w * s->h;
+    if (s->phase != PHASE_FILL)
+        return 0;
+    if (s->held)
+        return s->grains + s->water + s->solids + s->iron >= (s->drain_overfill - DRAIN_WARN) * area;
+    return s->grains >= (s->fill_reset - DRAIN_WARN) * area;
+}
+
 /* Choose what to do next, in order: eat, clear junk off home, farm,
  * stockpile water, build, idle. A goal in progress is only interrupted
  * for a stroll. */
@@ -2344,6 +2414,14 @@ static void think(Sim *s, int i)
                     find_best(s, i, rank_seed_spot, &fx, &fy) ||
                     find_far(s, i, rank_seed_spot, &fx, &fy))) {
         set_goal(s, c, G_PLANT, fx, fy);
+        return;
+    }
+
+    /* A drain is coming: onto its patch's iron to wait it out. The rest
+     * of the ledge crumbles in the drain. */
+    if (drain_soon(s) && patch_ok(s, c) && !over_iron(s, c) &&
+        !avoided(s, c, c->patch_x, c->patch_y)) {
+        set_goal(s, c, G_PATCH, c->patch_x, c->patch_y);
         return;
     }
 
@@ -2894,6 +2972,11 @@ void critters_drain(Sim *s)
             c->state = CR_WALK;
         } else if (on_kept) {
             set_goal(s, c, G_SHELTER, c->x, c->y);
+        } else if (home_bound(s, c)) {
+            /* Up by its patch: the patch comes through, so it waits on it
+             * (the sand it's standing on drains away from under it). */
+            set_goal(s, c, G_SHELTER, c->patch_x, c->patch_y - 1);
+            c->state = CR_WALK;
         } else {
             set_goal(s, c, G_LEAVE, c->x < s->w / 2 ? 0 : s->w - c->w, c->y);
         }
