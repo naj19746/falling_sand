@@ -781,6 +781,53 @@ a home. Yet wells still hold almost no water at the end of a day
 (0-1 cells). I haven't traced whether no water gets in, or whether
 critters draw it out again to pour on the field.
 
+### Follow-up: wells let sand through; a bug pass
+
+**Wells as filters.** Asked: let sand fall through wells. Any grain
+inside a well now drops through the floor to the first open cell below
+it. If there's no open cell all the way down, it stays put; at first it
+was deleted, which made a well sitting low in the pile a sand drain. t11
+caught that: the test's well sits on solid ground.
+
+Building fixes that went with it:
+- Building material and sand to press must be within 8 rows of the
+  home's floor. Otherwise a critter on its ledge kept heading for dirt on
+  the ground 30 rows below.
+- With no sand in reach to press, a critter walks to sand near its
+  home's level.
+- t19's home is now finished in 12 minutes (was 31).
+
+Well trace (4 realistic days): interiors 18-41% grains (was 42-82%),
+42-71% empty, a few percent water.
+
+**Bug pass over the branch**, besides the sand drain above:
+- `gutter()` checked the hut's roof position even for homes without a
+  hut, so a drop landing on anything built there (a stair step, say) was
+  moved into the well. Fixed.
+- A new critter that found no room by an existing patch, then landed on
+  a good spot elsewhere, still adopted the faraway patch. Fixed.
+- A patch's well was placed toward an end measured from the wrong
+  middle (the 3-wide one). Fixed.
+- Looked like a bug, isn't: a critter may plant its seed on sand lying
+  on an existing patch. That grows no new iron, but turns the sand on
+  the patch back into dirt and brings a shower, renewing the field.
+  Stopping it cut bites per critter from 2.7 to 1.1 in the typical day,
+  so it stays, with a comment saying why.
+- Checked and fine: movement and hopping bounds, the cistern and pull
+  code, every cell write going through `set_cell()`, the sand-brick
+  count, the drain marking kept cells before critters decide to stay,
+  and the rewards thread (queue locking, state file writes, the curl
+  URL check).
+
+All step tests pass.
+
+**Matrix (typical day, 8 seeds x 3 days), final code:** 4/8 runs alive
+at the end, mean life 2.8 h, 2.7 bites per arrival. With the filter
+wells and the level rule (before the bug pass; the pass changed little
+except as noted): 2 kept alive 2.9 h, 3.4 bites per arrival, 7 runs
+with a finished home; 3 kept alive 3.1 h, 3.9 bites; starve240 7.6 h.
+Wells now hold some water by evening in a few runs (up to 14 cells).
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,

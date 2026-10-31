@@ -848,7 +848,7 @@ int gutter(Sim *s, int x, int y)
             continue;
         int hx = hut_x(h), wx = well_x(h);
         if (!(y + 1 == well_top(h) && x >= wx && x < wx + h->ww) &&
-            !(y + 1 == h->y - 4 && x >= hx && x < hx + HUT_W))
+            !(h->hut && y + 1 == h->y - 4 && x >= hx && x < hx + HUT_W))
             continue;
         for (int wy = h->wy1; wy >= h->wy0; wy--)
             for (int wxx = h->wx0; wxx <= h->wx1; wxx++)
@@ -866,7 +866,9 @@ int gutter(Sim *s, int x, int y)
 
 /* Wells act as cisterns: water resting on a well's roof seeps through
  * into it, and loose water within WELL_PULL cells drifts toward it, a cell
- * at a time, PULL_TRIES random cells looked at each step. */
+ * at a time, PULL_TRIES random cells looked at each step. They're filters
+ * too: sand or anything else loose that gets in falls on through the
+ * floor, to the first open cell under it, if there is one. */
 #define WELL_PULL  6
 #define PULL_TRIES 2
 
@@ -887,8 +889,24 @@ static void cisterns(Sim *s)
 {
     for (int k = 0; k < MAX_HOMES; k++) {
         const Home *h = &s->home[k];
+        if (!h->used)
+            continue;
+        /* Grains inside fall through the floor, the lowest first. */
+        for (int y = h->wy1; y >= h->wy0; y--)
+            for (int x = h->wx0; x <= h->wx1; x++) {
+                uint16_t v = at(s, x, y);
+                if (!FALLS(CELL_TYPE(v)))
+                    continue;
+                int yy = h->y + 1;
+                while (yy < s->h && CELL_TYPE(at(s, x, yy)) != EMPTY)
+                    yy++;
+                if (yy >= s->h)
+                    continue;       /* packed solid below: it stays */
+                set_cell(s, x, y, CELL(EMPTY, 0));
+                set_cell(s, x, yy, v);
+            }
         int rx, ry, top = well_top(h), wx = well_x(h);
-        if (!h->used || top < 1 || !well_room(s, h, &rx, &ry))
+        if (top < 1 || !well_room(s, h, &rx, &ry))
             continue;
         /* Through the roof. */
         for (int x = wx; x < wx + h->ww; x++) {
@@ -1300,7 +1318,8 @@ static int patch_site(const Sim *s, const Critter *c, Home *out)
             ok = !h->used || x0 + PATCH_WELL_W <= h->x || x0 >= h->x + home_w(h) ||
                  abs(h->y - f) > WELL_MAX_ROWS + 2;
         }
-        if (ok && (best < 0 || abs(x0 + 1 - c->patch_x) > abs(best + 1 - c->patch_x))) {
+        int mid = PATCH_WELL_W / 2;
+        if (ok && (best < 0 || abs(x0 + mid - c->patch_x) > abs(best + mid - c->patch_x))) {
             best = x0;
             bf = f;
         }
@@ -1818,6 +1837,12 @@ static int press_spot(const Sim *s, int i, int *fx, int *fy)
     return 0;
 }
 
+/* Sand to walk to and press, out in the open and not in a plan. */
+static int rank_press(const Sim *s, int x, int y)
+{
+    return CELL_TYPE(at(s, x, y)) == SAND && open_above(s, x, y) && !in_plan(s, x, y) ? 0 : -1;
+}
+
 /* Pressing the grain at the goal into dirt, slowly. */
 static void press(Sim *s, int i)
 {
@@ -1939,7 +1964,10 @@ static int patch_end_spot(const Sim *s, const Critter *c, int *fx, int *fy)
     return best > 0;
 }
 
-/* Where to plant a seed: the bare top of a stone ledge, or sand on one. */
+/* Where to plant a seed: the bare top of a stone ledge, or sand on one.
+ * Sand on a patch counts too: a seed planted there grows no new iron, but
+ * turns the sand piled on the patch back into dirt and brings a shower to
+ * green it, which renews the field. */
 static int rank_seed_spot(const Sim *s, int x, int y)
 {
     uint16_t v = at(s, x, y);
@@ -2300,9 +2328,8 @@ static void think(Sim *s, int i)
         set_goal(s, c, G_EAT, fx, fy);
         return;
     }
-    /* A seed to plant: on the nearest ledge. Without one in sight or
-     * anywhere on the screen, it keeps the seed for later. */
-    /* Living on a patch, it widens that; else the nearest ledge. */
+    /* A seed to plant: living on a patch, at its end to widen it; else
+     * on the nearest ledge. With nowhere at all, it keeps the seed. */
     if (c->seed && ((patch_ok(s, c) && patch_end_spot(s, c, &fx, &fy)) ||
                     find_best(s, i, rank_seed_spot, &fx, &fy) ||
                     find_far(s, i, rank_seed_spot, &fx, &fy))) {
@@ -2338,15 +2365,17 @@ static void think(Sim *s, int i)
         set_goal(s, c, G_CLEAR, fx, fy);
         return;
     }
-    /* Then finishing the well: with material in sight, or else a brick
-     * pressed from sand in reach. (The sand-mover leaves it to others.) */
+    /* Then finishing the well: with material in sight up at the home's
+     * level, or else a brick pressed from sand in reach. (The sand-mover
+     * leaves it to others.) */
     int bx, by, need = c->role != ROLE_SAND && h && at_home_level(c, h) &&
                        next_build(s, h, &bx, &by);
-    if (need && find_best(s, i, rank_stone, &fx, &fy)) {
+    if (need && find_best(s, i, rank_stone, &fx, &fy) && abs(fy - h->y) <= HOME_LEVEL) {
         set_goal(s, c, G_BUILD, fx, fy);
         return;
     }
-    if (need && press_spot(s, i, &fx, &fy)) {
+    if (need && (press_spot(s, i, &fx, &fy) ||
+                 (find_best(s, i, rank_press, &fx, &fy) && abs(fy - h->y) <= HOME_LEVEL))) {
         set_goal(s, c, G_PRESS, fx, fy);
         return;
     }
@@ -2403,8 +2432,9 @@ static void think(Sim *s, int i)
         set_goal(s, c, G_BUILD, fx, fy);
         return;
     }
-    /* A wide well can use up the stone in sight: then it goes looking. */
-    if (need && (find_best(s, i, rank_stone, &fx, &fy) || find_far(s, i, rank_stone, &fx, &fy))) {
+    /* None in sight: it goes looking, up at the home's level. */
+    if (need && (find_best(s, i, rank_stone, &fx, &fy) || find_far(s, i, rank_stone, &fx, &fy)) &&
+        abs(fy - h->y) <= HOME_LEVEL) {
         set_goal(s, c, G_BUILD, fx, fy);
         return;
     }
@@ -2739,7 +2769,8 @@ static void critter_tick(Sim *s, int i)
         go_patch(s, i);
         break;
     case G_PRESS:
-        press(s, i);
+        if (approach(s, i))
+            press(s, i);
         break;
     case G_SHELTER:
         /* Into the hut, then wait there for the next fill. Given up on,
@@ -3001,7 +3032,7 @@ int sim_add_critter(Sim *s, int kind)
     c->y = c->h - 1;
 
     /* Join a colony: drop in over a critter's patch, a few columns off. */
-    int best = -1, rank = 0, lead = colony_lead(s, slot);
+    int best = -1, rank = 0, lead = colony_lead(s, slot), joined = 0;
     if (lead >= 0) {
         const Critter *l = &s->crit[lead];
         for (int tries = 0; tries < 16 && best < 0; tries++) {
@@ -3009,8 +3040,10 @@ int sim_add_critter(Sim *s, int kind)
             if (x >= 0 && x <= s->w - c->w && fits(s, slot, x, c->y))
                 best = x;
         }
-        if (best >= 0)
+        if (best >= 0) {
             rank = 3;
+            joined = 1;
+        }
     }
     /* Else a clear spot along the top, best first: over stone or iron to
      * stand and build on with earth near it, over earth, over stone or
@@ -3044,7 +3077,7 @@ int sim_add_critter(Sim *s, int kind)
     c->food = 1.0f;
     c->seed = 1;
     c->home = -1;
-    if (lead >= 0 && rank == 3) {
+    if (joined) {
         /* It lives on the lead's patch, and the colony's second critter
          * moves sand for it. */
         const Critter *l = &s->crit[lead];
