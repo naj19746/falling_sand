@@ -872,6 +872,10 @@ int gutter(Sim *s, int x, int y)
 #define WELL_PULL  6
 #define PULL_TRIES 2
 
+/* Water drawn from a well is left there WELL_KEEP of the time: it's fed
+ * by a spring as well as the rain. */
+#define WELL_KEEP  0.6f
+
 /* The lowest open cell inside well h, or 0 if it's full. */
 static int well_room(const Sim *s, const Home *h, int *rx, int *ry)
 {
@@ -1397,6 +1401,12 @@ static int draw_from_well(Sim *s, Critter *c, const Home *h, int junk)
                 continue;
             c->carry = t == WATER ? CELL(WATER, CELL_COLOR(at(s, x, y)) & 0x3F)
                                   : at(s, x, y) & ~(BUILT << 8);
+            if (t == WATER) {
+                s->drawn++;
+                /* A spring: often the water's still there after a draw. */
+                if (rndf(s) < WELL_KEEP)
+                    return 1;
+            }
             set_cell(s, x, y, CELL(EMPTY, 0));
             return 1;
         }

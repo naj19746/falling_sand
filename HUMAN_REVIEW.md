@@ -828,6 +828,29 @@ except as noted): 2 kept alive 2.9 h, 3.4 bites per arrival, 7 runs
 with a finished home; 3 kept alive 3.1 h, 3.9 bites; starve240 7.6 h.
 Wells now hold some water by evening in a few runs (up to 14 cells).
 
+### Follow-up: do critters use their wells? A spring
+
+Asked: do critters draw from their wells, and would a well that keeps
+the water 60% of the time it's drawn help?
+
+- **They use them, but rarely:** 0-26 draws a run over 3 days (an
+  average of 4.5 in the typical day, 11 with 2 kept alive), against 8-35
+  pours a run. Most water they pour is caught rain or puddles.
+- Added `WELL_KEEP` 0.6: a draw leaves the water in the well 60% of the
+  time, like a spring. New `drawn` counter in `Sim`.
+
+| Same 8 seeds x 3 days | Mean life | Bites per arrival | Runs alive at end |
+|---|---|---|---|
+| typical, `WELL_KEEP` 0 | 2.5 h | 2.1 | 6/8 |
+| typical, `WELL_KEEP` 0.6 | 2.3 h | 1.7 | 4/8 |
+| 2 kept alive, 0 | 2.3 h | 2.5 | 8/8 |
+| 2 kept alive, 0.6 | 3.0 h | 3.1 | 8/8 |
+
+That's within the noise: the `WELL_KEEP` 0 runs use the same code as
+the previous commit, only with a different random stream, and the
+typical day moved from 2.8 h to 2.5 h by that alone. With so few draws,
+a spring can't change much. It's harmless and easy to tune or set to 0.
+
 ## Harness and checks
 
 The throwaway harness is in the session scratchpad,
