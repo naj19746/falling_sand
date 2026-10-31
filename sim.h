@@ -202,6 +202,15 @@ typedef struct {
     int wx0, wy0, wx1, wy1; /* well interior, inclusive: water never dries there */
 } Home;
 
+/* The matches of one kind of full-screen search (critter.c, find_far()),
+ * shared by every critter for a few seconds. */
+#define FAR_LISTS 4
+typedef struct {
+    uint32_t at;            /* sim frame it was made */
+    int n;
+    int *cell;              /* indexes into cells, in scan order; w*h of room */
+} FarList;
+
 enum { PHASE_FILL, PHASE_DRAIN };
 
 typedef struct {
@@ -260,6 +269,8 @@ typedef struct {
     int wheat;              /* wheat cells, running total */
     int bodies;             /* body cells, running total */
     int bricks;             /* sand bricks, running total */
+    int seeds;              /* seed cells, running total */
+    uint32_t fresh_at;      /* sim frame a raindrop last started falling */
     uint8_t *keep;          /* per cell: kept through the drain */
     int *stack;             /* flood-fill scratch, w*h ints */
     int kept_grains;        /* kept dirt/moss, counted in grains too */
@@ -290,6 +301,7 @@ typedef struct {
     long tossed;            /* grains critters have tossed off the screen */
     int toss_window;        /* of those, in the current stall window */
     Toss toss[MAX_CRITTERS];/* the last toss each made, for the renderer */
+    FarList far[FAR_LISTS];
     /* Farming counts, for checking that only pours make wheat. */
     long pours, pour_converted, pour_levels, bites, rotted;
     long stocked, laid;     /* water into wells, cells built */

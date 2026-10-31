@@ -303,6 +303,10 @@ void sim_free(Sim *s)
     free(s->rain_at);
     free(s->keep);
     free(s->stack);
+    for (int k = 0; k < FAR_LISTS; k++) {
+        free(s->far[k].cell);
+        s->far[k].cell = NULL;
+    }
     s->moved = NULL;
     s->since = s->rain_at = NULL;
     s->cells = NULL;
@@ -314,7 +318,7 @@ void sim_reset(Sim *s)
     memset(s->cells, 0, (size_t)s->w * s->h * sizeof *s->cells);
     if (s->keep) memset(s->keep, 0, (size_t)s->w * s->h);
     s->grains = s->solids = s->water = s->damp = s->glass = s->iron = 0;
-    s->wheat = s->bodies = s->bricks = 0;
+    s->wheat = s->bodies = s->bricks = s->seeds = 0;
     s->kept_grains = s->kept_solids = 0;
     memset(s->tree, 0, sizeof s->tree);
     s->trees = 0;

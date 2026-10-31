@@ -1220,27 +1220,76 @@ static int rank_stone(const Sim *s, int x, int y)
     return -1;
 }
 
+/* Full-screen searches share one list of matches per kind, made at most
+ * every FAR_SECS: a critter with nothing in sight looks again every
+ * second, and many of them each scanning the whole grid was most of what
+ * critters cost. Every match is checked again when it's used, so an old
+ * list only misses cells that turned up since it was made. */
+enum { FAR_FOOD, FAR_SEED_SPOT, FAR_STONE, FAR_IRON };   /* FAR_LISTS */
+#define FAR_SECS 5.0f
+
+static int rank_seed_spot(const Sim *s, int x, int y);
+
+/* Unbuilt iron. */
+static int rank_iron(const Sim *s, int x, int y)
+{
+    uint16_t v = at(s, x, y);
+    return CELL_TYPE(v) == IRON && !(CELL_COLOR(v) & BUILT) ? 0 : -1;
+}
+
+static const Rank far_rank[FAR_LISTS] = { rank_food, rank_seed_spot, rank_stone, rank_iron };
+/* The cell types each rank can take, so a scan skips the rest cheaply. */
+static const uint32_t far_types[FAR_LISTS] = {
+    1u << MOSS | 1u << WHEAT,
+    1u << STONE | 1u << SAND | 1u << DEBRIS | 1u << SHARD,
+    1u << DEBRIS | 1u << DIRT,
+    1u << IRON,
+};
+
+/* Every cell open above that list k's rank takes, made again once it's
+ * FAR_SECS old. Shared, so it isn't sped up by a charge. */
+static const FarList *far_list(Sim *s, int k)
+{
+    FarList *l = &s->far[k];
+    if (l->cell && s->frame - l->at < (uint32_t)secs(s, FAR_SECS))
+        return l;
+    if (!l->cell && !(l->cell = malloc((size_t)s->w * s->h * sizeof *l->cell)))
+        return l;                   /* no room: it finds nothing */
+    l->n = 0;
+    l->at = s->frame;
+    uint32_t types = far_types[k];
+    for (int y = 0; y < s->h; y++) {
+        const uint16_t *row = s->cells + y * s->w;
+        for (int x = 0; x < s->w; x++)
+            if ((types >> CELL_TYPE(row[x]) & 1) && open_above(s, x, y) &&
+                far_rank[k](s, x, y) >= 0)
+                l->cell[l->n++] = y * s->w + x;
+    }
+    return l;
+}
+
 /* Nothing in sight: the best-ranked cell open above anywhere on screen,
- * nearest of equals. A full scan, so it waits IRON_LOOK_SECS after
- * finding nothing. */
-static int find_far(Sim *s, int i, Rank rank, int *fx, int *fy)
+ * nearest of equals, from list k. Finding nothing, it waits
+ * IRON_LOOK_SECS before looking again. */
+static int find_far(Sim *s, int i, int k, int *fx, int *fy)
 {
     Critter *c = &s->crit[i];
     if (s->frame < c->far_next)
         return 0;
+    const FarList *l = far_list(s, k);
     int best = 1 << 30;
-    for (int y = 0; y < s->h; y++)
-        for (int x = 0; x < s->w; x++) {
-            int r = rank(s, x, y);
-            if (r < 0)
-                continue;
-            int score = r * 1024 + dist(c, x, y);
-            if (score >= best || avoided(s, c, x, y) || !open_above(s, x, y))
-                continue;
-            best = score;
-            *fx = x;
-            *fy = y;
-        }
+    for (int j = 0; j < l->n; j++) {
+        int x = l->cell[j] % s->w, y = l->cell[j] / s->w;
+        int r = far_rank[k](s, x, y);
+        if (r < 0)
+            continue;
+        int score = r * 1024 + dist(c, x, y);
+        if (score >= best || avoided(s, c, x, y) || !open_above(s, x, y))
+            continue;
+        best = score;
+        *fx = x;
+        *fy = y;
+    }
     if (best < (1 << 30))
         return 1;
     c->far_next = s->frame + csecs(s, c, IRON_LOOK_SECS);
@@ -1254,19 +1303,19 @@ static int find_iron(Sim *s, int i, int *fx, int *fy)
     Critter *c = &s->crit[i];
     if (c->kind != CR_LARGE || s->iron == 0 || s->frame < c->iron_next)
         return 0;
+    const FarList *l = far_list(s, FAR_IRON);
     int best = 1 << 30;
-    for (int y = 0; y < s->h; y++)
-        for (int x = 0; x < s->w; x++) {
-            uint16_t v = at(s, x, y);
-            if (CELL_TYPE(v) != IRON || (CELL_COLOR(v) & BUILT))
-                continue;
-            int d = dist(c, x, y);
-            if (d >= best || near_home(s, x, y) || avoided(s, c, x, y) || !open_above(s, x, y))
-                continue;
-            best = d;
-            *fx = x;
-            *fy = y;
-        }
+    for (int j = 0; j < l->n; j++) {
+        int x = l->cell[j] % s->w, y = l->cell[j] / s->w;
+        if (rank_iron(s, x, y) < 0)
+            continue;
+        int d = dist(c, x, y);
+        if (d >= best || near_home(s, x, y) || avoided(s, c, x, y) || !open_above(s, x, y))
+            continue;
+        best = d;
+        *fx = x;
+        *fy = y;
+    }
     if (best < (1 << 30))
         return 1;
     c->iron_next = s->frame + csecs(s, c, IRON_LOOK_SECS);
@@ -2404,7 +2453,7 @@ static void think(Sim *s, int i)
     c->eating = (uint8_t)hungry;
     /* Anything it can reach goes before better food it can't. */
     if (hungry && (in_reach_best(s, i, rank_food, &fx, &fy) ||
-                   find_best(s, i, rank_food, &fx, &fy) || find_far(s, i, rank_food, &fx, &fy))) {
+                   find_best(s, i, rank_food, &fx, &fy) || find_far(s, i, FAR_FOOD, &fx, &fy))) {
         set_goal(s, c, G_EAT, fx, fy);
         return;
     }
@@ -2412,7 +2461,7 @@ static void think(Sim *s, int i)
      * on the nearest ledge. With nowhere at all, it keeps the seed. */
     if (c->seed && ((patch_ok(s, c) && patch_end_spot(s, c, &fx, &fy)) ||
                     find_best(s, i, rank_seed_spot, &fx, &fy) ||
-                    find_far(s, i, rank_seed_spot, &fx, &fy))) {
+                    find_far(s, i, FAR_SEED_SPOT, &fx, &fy))) {
         set_goal(s, c, G_PLANT, fx, fy);
         return;
     }
@@ -2523,7 +2572,7 @@ static void think(Sim *s, int i)
         return;
     }
     /* None in sight: it goes looking, up at the home's level. */
-    if (need && (find_best(s, i, rank_stone, &fx, &fy) || find_far(s, i, rank_stone, &fx, &fy)) &&
+    if (need && (find_best(s, i, rank_stone, &fx, &fy) || find_far(s, i, FAR_STONE, &fx, &fy)) &&
         abs(fy - h->y) <= HOME_LEVEL) {
         set_goal(s, c, G_BUILD, fx, fy);
         return;
@@ -2679,30 +2728,47 @@ static void catch_seed(Sim *s, int i)
  * column to stand in to catch the nearest one. */
 static int falling(const Sim *s, const Critter *c, int seed, int *dx)
 {
+    /* Nothing in the air: no seed anywhere, or no raindrop started
+     * recently enough to still be falling (they fall a cell a step). */
+    if (seed ? s->seeds == 0 : s->frame - s->fresh_at > 2 * (uint32_t)s->h)
+        return 0;
     int best = CATCH_RANGE + 1, move = csecs(s, c, MOVE_SECS / SPRINT);
     if (move < 1)
         move = 1;
-    for (int x = c->x - CATCH_RANGE; x < c->x + c->w + CATCH_RANGE; x++) {
-        if (x < 0 || x >= s->w)
-            continue;
-        for (int y = 0; y < c->y - c->h; y++) {
-            uint16_t v = at(s, x, y);
-            if (seed ? CELL_TYPE(v) == SEED
-                     : CELL_TYPE(v) == WATER && (CELL_COLOR(v) & RAIN_FRESH)) {
-                /* It's in reach one column out from its body, if nothing
-                 * stops it first. */
-                int to = x < c->x - 1 ? x + 1 : x > c->x + c->w ? x - c->w : c->x;
-                int d = abs(to - c->x), clear = 1;
-                for (int yy = y + 1; yy < c->y - c->h && clear; yy++)
-                    clear = CELL_TYPE(at(s, x, yy)) == EMPTY;
-                if (clear && d < best && d * move <= c->y - c->h - y) {
-                    best = d;
-                    *dx = to;
-                }
-                break;
+    int x0 = c->x - CATCH_RANGE, x1 = c->x + c->w + CATCH_RANGE, head = c->y - c->h;
+    if (x0 < 0) x0 = 0;
+    if (x1 > s->w) x1 = s->w;
+    /* Row by row from the top, which reads the grid in order. Per column:
+     * the row of a drop that's the first thing in it, -1 while it's open
+     * air, NONE once something else is in the way. */
+    enum { NONE = -2 };
+    int hit[2 * CATCH_RANGE + 2], open = x1 - x0;
+    for (int k = 0; k < x1 - x0; k++)
+        hit[k] = -1;
+    for (int y = 0; y < head && open > 0; y++) {
+        const uint16_t *row = s->cells + y * s->w + x0;
+        for (int k = 0; k < x1 - x0; k++) {
+            if (hit[k] == NONE || CELL_TYPE(row[k]) == EMPTY)
+                continue;
+            if (hit[k] == -1 && (seed ? CELL_TYPE(row[k]) == SEED
+                                      : CELL_TYPE(row[k]) == WATER &&
+                                        (CELL_COLOR(row[k]) & RAIN_FRESH))) {
+                hit[k] = y;
+            } else {
+                hit[k] = NONE;      /* not a drop, or something under one */
+                open--;
             }
-            if (CELL_TYPE(v) != EMPTY)
-                break;
+        }
+    }
+    for (int k = 0; k < x1 - x0; k++) {
+        if (hit[k] < 0)
+            continue;
+        /* It's in reach one column out from its body. */
+        int x = x0 + k, to = x < c->x - 1 ? x + 1 : x > c->x + c->w ? x - c->w : c->x;
+        int d = abs(to - c->x);
+        if (d < best && d * move <= head - hit[k]) {
+            best = d;
+            *dx = to;
         }
     }
     return best <= CATCH_RANGE;
@@ -2720,7 +2786,7 @@ static void critter_tick(Sim *s, int i)
             start_dying(s, c);
         }
     }
-    if (!c->seed && c->goal != G_DIE)
+    if (!c->seed && s->seeds && c->goal != G_DIE)
         catch_seed(s, i);
     if (c->thirsty && !c->carry && c->goal != G_DIE)
         catch_drop(s, i);

@@ -81,6 +81,7 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
     s->wheat  += (new == WHEAT) - (old == WHEAT);
     s->bodies += (new == BODY) - (old == BODY);
     s->bricks += IS_SAND_BRICK(v) - IS_SAND_BRICK(*cell);
+    s->seeds  += (new == SEED) - (old == SEED);
     s->water  += (new == WATER) - (old == WATER);
     s->damp   += DAMP(new) - DAMP(old);
     /* Wheat rots and sand bricks crumble by sim time, the rest by the
@@ -89,6 +90,9 @@ static inline void set_cell(Sim *s, int x, int y, uint16_t v)
         s->since[idx] = s->frame / (uint32_t)s->steps_per_sec;
     else if (DAMP(new) || new == BODY)
         s->since[idx] = s->clock;
+    /* Critters only look up for raindrops while some may be falling. */
+    if (new == WATER && (CELL_COLOR(v) & RAIN_FRESH))
+        s->fresh_at = s->frame;
     *cell = v;
     /* The kept mask follows the type: a kept cell that turns into
      * something else iron holds (wet dirt drying, moss sprouting a trunk)

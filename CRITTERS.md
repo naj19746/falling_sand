@@ -43,6 +43,10 @@ energy.
   a second by scanning a small window around itself, then walks greedily
   toward it, climbing one-cell steps and digging through loose material.
   If it makes no progress for a while, it gives up and picks another goal.
+  With nothing in the window, it looks across the whole screen, through
+  a list of matches all critters share and remake every few seconds
+  (`find_far()`). Looking up for rain and seeds is skipped while none
+  can be falling.
 - **Their time is the simulation's time.** Hunger and burial count sim
   steps, and so does wheat's slow rot. Critters don't starve, and fields
   don't rot, while the desktop is covered or the computer is off. Only
